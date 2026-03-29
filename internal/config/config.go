@@ -114,12 +114,40 @@ type GatewayCfg struct {
 	HTTP GatewayHTTP  `json:"http,omitempty"`
 }
 
-// Mem0Cfg configures the Mem0 memory integration.
-type Mem0Cfg struct {
-	Enabled  bool   `json:"enabled"`
-	URL      string `json:"url,omitempty"`      // default "http://127.0.0.1:8100"
-	APIKey   string `json:"apiKey,omitempty"`
-	TopK     int    `json:"topK,omitempty"`     // max memories to inject, default 5
+// MemoryCfg holds memory system configuration.
+type MemoryCfg struct {
+	AutoPersist AutoPersistCfg `json:"autoPersist,omitempty"`
+	FTS         FTSCfg         `json:"fts,omitempty"`
+}
+
+// AutoPersistCfg controls automatic memory persistence after agent turns.
+type AutoPersistCfg struct {
+	Enabled     bool   `json:"enabled"`                  // default true
+	EveryNTurns int    `json:"everyNTurns,omitempty"`    // default 5
+	Model       string `json:"model,omitempty"`           // override model for extraction
+}
+
+// FTSCfg configures full-text search.
+type FTSCfg struct {
+	Enabled bool   `json:"enabled"`
+	DBPath  string `json:"dbPath,omitempty"`
+}
+
+// PrivacyCfg holds privacy-related settings.
+type PrivacyCfg struct {
+	PIIScrubbing PIIScrubCfg `json:"piiScrubbing,omitempty"`
+}
+
+// PIIScrubCfg controls PII scrubbing before LLM calls.
+type PIIScrubCfg struct {
+	Enabled bool `json:"enabled"` // default false — opt-in
+}
+
+// SkillsLearnerCfg configures the skills learning loop.
+type SkillsLearnerCfg struct {
+	Enabled      bool   `json:"enabled"`               // default false — opt-in
+	MinToolCalls int    `json:"minToolCalls,omitempty"` // default 3
+	Model        string `json:"model,omitempty"`        // override model
 }
 
 // Config is the top-level configuration loaded from ~/.fastclaw/fastclaw.json.
@@ -139,7 +167,9 @@ type Config struct {
 	Gateway    GatewayCfg                 `json:"gateway,omitempty"`
 	TaskQueue  TaskQueueCfg               `json:"taskQueue,omitempty"`
 	Skills     SkillsCfg                  `json:"skills,omitempty"`
-	Mem0       Mem0Cfg                    `json:"mem0,omitempty"`
+	Memory     MemoryCfg                  `json:"memory,omitempty"`
+	Privacy    PrivacyCfg                 `json:"privacy,omitempty"`
+	SkillsLearner SkillsLearnerCfg        `json:"skillsLearner,omitempty"`
 }
 
 // ModelCost holds pricing info for a model.
