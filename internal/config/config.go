@@ -166,10 +166,10 @@ type Config struct {
 	Plugins    PluginsCfg                 `json:"plugins,omitempty"`
 	Gateway    GatewayCfg                 `json:"gateway,omitempty"`
 	TaskQueue  TaskQueueCfg               `json:"taskQueue,omitempty"`
-	Skills     SkillsCfg                  `json:"skills,omitempty"`
-	Memory     MemoryCfg                  `json:"memory,omitempty"`
-	Privacy    PrivacyCfg                 `json:"privacy,omitempty"`
-	SkillsLearner SkillsLearnerCfg        `json:"skillsLearner,omitempty"`
+	Skills        SkillsCfg                  `json:"skills,omitempty"`
+	Memory        MemoryCfg                  `json:"memory,omitempty"`
+	Privacy       PrivacyCfg                 `json:"privacy,omitempty"`
+	SkillsLearner SkillsLearnerCfg           `json:"skillsLearner,omitempty"`
 }
 
 // ModelCost holds pricing info for a model.
