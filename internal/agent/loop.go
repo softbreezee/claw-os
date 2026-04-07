@@ -412,6 +412,37 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 			llmMessages = privacy.ScrubMessages(messages)
 		}
 
+		// 【关键修复】清理对话历史，确保没有带tool_calls但没有tool响应的assistant消息
+		cleanedMessages := make([]provider.Message, 0, len(llmMessages))
+		for i := 0; i < len(llmMessages); i++ {
+			msg := llmMessages[i]
+			
+			// 如果是带tool calls的assistant消息，检查是否有对应的tool响应
+			if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+				hasToolResponses := false
+				// 检查后面的消息
+				for j := i + 1; j < len(llmMessages); j++ {
+					if llmMessages[j].Role == "tool" {
+						hasToolResponses = true
+						continue
+					}
+					if llmMessages[j].Role == "user" || llmMessages[j].Role == "system" {
+						break
+					}
+				}
+				// 如果没有tool响应，跳过这个assistant消息
+				if !hasToolResponses {
+					slog.Warn("skipping incomplete assistant message", "agent", a.name)
+					continue
+				}
+			}
+			
+			cleanedMessages = append(cleanedMessages, msg)
+		}
+		
+		// 使用清理后的消息
+		llmMessages = cleanedMessages
+
 		resp, err := a.provider.Chat(ctx, llmMessages, toolDefs, a.model, a.maxTokens, a.temperature)
 
 		// Hook: AfterModelCall
@@ -653,7 +684,35 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 		hcBefore := &HookContext{AgentName: a.name, Point: BeforeModelCall, Messages: messages}
 		a.hooks.Run(ctx, hcBefore)
 
-		resp, err := a.provider.Chat(ctx, messages, toolDefs, a.model, a.maxTokens, a.temperature)
+		// 【关键修复】清理对话历史，确保没有带tool_calls但没有tool响应的assistant消息
+		cleanedMessages := make([]provider.Message, 0, len(messages))
+		for i := 0; i < len(messages); i++ {
+			msg := messages[i]
+			
+			// 如果是带tool calls的assistant消息，检查是否有对应的tool响应
+			if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+				hasToolResponses := false
+				// 检查后面的消息
+				for j := i + 1; j < len(messages); j++ {
+					if messages[j].Role == "tool" {
+						hasToolResponses = true
+						continue
+					}
+					if messages[j].Role == "user" || messages[j].Role == "system" {
+						break
+					}
+				}
+				// 如果没有tool响应，跳过这个assistant消息
+				if !hasToolResponses {
+					slog.Warn("skipping incomplete assistant message", "agent", a.name)
+					continue
+				}
+			}
+			
+			cleanedMessages = append(cleanedMessages, msg)
+		}
+		
+		resp, err := a.provider.Chat(ctx, cleanedMessages, toolDefs, a.model, a.maxTokens, a.temperature)
 
 		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime}
 		a.hooks.Run(ctx, hcAfter)
@@ -665,7 +724,34 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 
 		if !resp.HasToolCalls() {
 			// Final response - use streaming
-			sr, err := a.provider.ChatStream(ctx, messages, toolDefs, a.model, a.maxTokens, a.temperature)
+			// 【关键修复】清理对话历史，确保没有带tool_calls但没有tool响应的assistant消息
+			cleanedStreamMessages := make([]provider.Message, 0, len(messages))
+			for i := 0; i < len(messages); i++ {
+				msg := messages[i]
+				
+				// 如果是带tool calls的assistant消息，检查是否有对应的tool响应
+				if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+					hasToolResponses := false
+					// 检查后面的消息
+					for j := i + 1; j < len(messages); j++ {
+						if messages[j].Role == "tool" {
+							hasToolResponses = true
+							continue
+						}
+						if messages[j].Role == "user" || messages[j].Role == "system" {
+							break
+						}
+					}
+					// 如果没有tool响应，跳过这个assistant消息
+					if !hasToolResponses {
+						slog.Warn("skipping incomplete assistant message for stream", "agent", a.name)
+						continue
+					}
+				}
+				
+				cleanedStreamMessages = append(cleanedStreamMessages, msg)
+			}
+			sr, err := a.provider.ChatStream(ctx, cleanedStreamMessages, toolDefs, a.model, a.maxTokens, a.temperature)
 			if err != nil {
 				slog.Error("LLM stream failed, falling back", "agent", a.name, "error", err)
 				sess.Append(provider.Message{Role: "assistant", Content: resp.Content})

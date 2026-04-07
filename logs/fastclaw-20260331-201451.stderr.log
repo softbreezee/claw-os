@@ -1,0 +1,15 @@
+time=2026-03-31T20:14:51.726+08:00 level=INFO msg="starting gateway"
+time=2026-03-31T20:14:51.727+08:00 level=INFO msg="provider config resolved" apiBase=https://api.deepseek.com/v1 apiType=openai-chat defaultModel=deepseek/deepseek-chat
+time=2026-03-31T20:14:51.727+08:00 level=INFO msg="loaded agent" id=deepseek-chat model=deepseek-chat workspace=/Users/leon/.fastclaw/agents/deepseek-chat/agent
+time=2026-03-31T20:14:51.727+08:00 level=INFO msg="loaded agent" id=zz model=deepseek-reasoner workspace=/Users/leon/.fastclaw/agents/zz/agent
+time=2026-03-31T20:14:51.728+08:00 level=INFO msg="loaded skills" agent="fastclaw 自修复" count=1
+time=2026-03-31T20:14:51.728+08:00 level=INFO msg="loaded agent" id="fastclaw 自修复" model=deepseek-reasoner workspace="/Users/leon/.fastclaw/agents/fastclaw 自修复/agent"
+time=2026-03-31T20:14:51.728+08:00 level=INFO msg="agents loaded" count=3 names="[deepseek-chat zz fastclaw 自修复]"
+Error: create gateway: create telegram bot: Post "https://api.telegram.org/bot8490823744:AAE0jMy0n6c-h41-Zqb4FUQBCw6ySPlYuYA/getMe": dial tcp 199.59.148.229:443: i/o timeout
+Usage:
+  fastclaw gateway [flags]
+
+Flags:
+  -h, --help       help for gateway
+      --port int   port for setup wizard / web UI (default 18953)
+

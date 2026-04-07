@@ -1,0 +1,313 @@
+time=2026-03-31T20:17:42.216+08:00 level=INFO msg="starting gateway"
+time=2026-03-31T20:17:42.216+08:00 level=INFO msg="provider config resolved" apiBase=https://api.deepseek.com/v1 apiType=openai-chat defaultModel=deepseek/deepseek-chat
+time=2026-03-31T20:17:42.217+08:00 level=INFO msg="loaded agent" id=deepseek-chat model=deepseek-chat workspace=/Users/leon/.fastclaw/agents/deepseek-chat/agent
+time=2026-03-31T20:17:42.217+08:00 level=INFO msg="loaded agent" id=zz model=deepseek-reasoner workspace=/Users/leon/.fastclaw/agents/zz/agent
+time=2026-03-31T20:17:42.217+08:00 level=INFO msg="loaded skills" agent="fastclaw 自修复" count=1
+time=2026-03-31T20:17:42.217+08:00 level=INFO msg="loaded agent" id="fastclaw 自修复" model=deepseek-reasoner workspace="/Users/leon/.fastclaw/agents/fastclaw 自修复/agent"
+time=2026-03-31T20:17:42.217+08:00 level=INFO msg="agents loaded" count=3 names="[zz fastclaw 自修复 deepseek-chat]"
+time=2026-03-31T20:17:43.125+08:00 level=INFO msg="telegram bot authorized" username=zzzss111_bot account=""
+time=2026-03-31T20:17:43.125+08:00 level=INFO msg="bot username mappings" map=map[fc-zz:zzzss111_bot]
+time=2026-03-31T20:17:43.126+08:00 level=INFO msg="gateway API enabled" port=18953 bind=loopback auth=token chatCompletions=false
+time=2026-03-31T20:17:43.126+08:00 level=INFO msg="wrote openclaw.json for ChatClaw auto-detect"
+time=2026-03-31T20:17:43.126+08:00 level=INFO msg="web UI available" url=http://localhost:18953
+time=2026-03-31T20:17:43.127+08:00 level=INFO msg="gateway started"
+time=2026-03-31T20:17:43.127+08:00 level=INFO msg="heartbeat started" agent=zz interval=30m0s
+time=2026-03-31T20:17:43.128+08:00 level=INFO msg="cron scheduler started" jobs=0 store_backed=false
+time=2026-03-31T20:17:43.127+08:00 level=INFO msg="heartbeat started" agent="fastclaw 自修复" interval=30m0s
+time=2026-03-31T20:17:43.127+08:00 level=INFO msg="heartbeat started" agent=deepseek-chat interval=30m0s
+time=2026-03-31T20:17:43.127+08:00 level=INFO msg="starting channel" key=telegram:
+time=2026-03-31T20:17:43.128+08:00 level=INFO msg="config watcher started" path=/Users/leon/.fastclaw
+time=2026-03-31T20:17:43.128+08:00 level=INFO msg="web UI running" url=http://localhost:18953
+time=2026-03-31T20:17:43.571+08:00 level=INFO msg="registered bot commands" account="" count=12
+time=2026-03-31T20:19:53.519+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=1 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:19:53.519+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:19:53.519+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:19:53.521+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:20:13.662+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=20.143313167s has_tool_calls=true
+time=2026-03-31T20:20:13.664+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:20:13.664+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_DBFTqHBRyo9xLJDdq7ZsFwEH
+time=2026-03-31T20:20:13.701+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=37.196125ms error=<nil>
+time=2026-03-31T20:20:13.701+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=2 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:20:13.701+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:20:13.701+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:20:13.703+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:20:24.177+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=10.476051458s has_tool_calls=true
+time=2026-03-31T20:20:24.178+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:20:24.178+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_DOt8JcfPs2u1gs5TfA0cv0rH
+time=2026-03-31T20:20:24.210+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=31.999667ms error="exit status 1"
+time=2026-03-31T20:20:24.210+08:00 level=WARN msg="tool execution error" agent="fastclaw 自修复" name=exec error="exit status 1"
+time=2026-03-31T20:20:24.210+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=3 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:20:24.210+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:20:24.210+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:20:24.212+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:20:34.343+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=10.132876542s has_tool_calls=true
+time=2026-03-31T20:20:34.344+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=spawn_subagent
+time=2026-03-31T20:20:34.344+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=spawn_subagent id=call_00_sWt00Q4y57Js1IWj4tdpSjcR
+time=2026-03-31T20:20:34.344+08:00 level=INFO msg="agent loop iteration" agent=deepseek-chat iteration=1 channel=subagent chat_id="subagent-fastclaw 自修复-deepseek-chat"
+time=2026-03-31T20:20:34.344+08:00 level=INFO msg="hook: before model call" agent=deepseek-chat
+time=2026-03-31T20:20:34.345+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-chat
+time=2026-03-31T20:20:37.573+08:00 level=INFO msg="hook: after model call" agent=deepseek-chat elapsed=3.228203917s has_tool_calls=true
+time=2026-03-31T20:20:37.573+08:00 level=INFO msg="hook: before tool call" agent=deepseek-chat tool=exec
+time=2026-03-31T20:20:37.573+08:00 level=INFO msg="executing tool" agent=deepseek-chat name=exec id=call_00_oOrbMnsaI1XLH0fn7EdMuKZI
+time=2026-03-31T20:20:37.603+08:00 level=INFO msg="hook: after tool call" agent=deepseek-chat tool=exec elapsed=29.601917ms error=<nil>
+time=2026-03-31T20:20:37.603+08:00 level=INFO msg="agent loop iteration" agent=deepseek-chat iteration=2 channel=subagent chat_id="subagent-fastclaw 自修复-deepseek-chat"
+time=2026-03-31T20:20:37.603+08:00 level=INFO msg="hook: before model call" agent=deepseek-chat
+time=2026-03-31T20:20:37.603+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-chat
+time=2026-03-31T20:20:40.509+08:00 level=INFO msg="hook: after model call" agent=deepseek-chat elapsed=2.906115167s has_tool_calls=true
+time=2026-03-31T20:20:40.510+08:00 level=INFO msg="hook: before tool call" agent=deepseek-chat tool=exec
+time=2026-03-31T20:20:40.510+08:00 level=INFO msg="executing tool" agent=deepseek-chat name=exec id=call_00_1Setlr8o1qnPVgGvhphsFuXP
+time=2026-03-31T20:20:40.531+08:00 level=INFO msg="hook: after tool call" agent=deepseek-chat tool=exec elapsed=21.054583ms error=<nil>
+time=2026-03-31T20:20:40.531+08:00 level=INFO msg="agent loop iteration" agent=deepseek-chat iteration=3 channel=subagent chat_id="subagent-fastclaw 自修复-deepseek-chat"
+time=2026-03-31T20:20:40.531+08:00 level=INFO msg="hook: before model call" agent=deepseek-chat
+time=2026-03-31T20:20:40.531+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-chat
+time=2026-03-31T20:20:43.428+08:00 level=INFO msg="hook: after model call" agent=deepseek-chat elapsed=2.896512167s has_tool_calls=true
+time=2026-03-31T20:20:43.428+08:00 level=INFO msg="hook: before tool call" agent=deepseek-chat tool=exec
+time=2026-03-31T20:20:43.428+08:00 level=INFO msg="executing tool" agent=deepseek-chat name=exec id=call_00_HCUyHN47RxqquIvwQVJD8Qrp
+time=2026-03-31T20:20:43.439+08:00 level=INFO msg="hook: after tool call" agent=deepseek-chat tool=exec elapsed=10.798791ms error=<nil>
+time=2026-03-31T20:20:43.439+08:00 level=INFO msg="agent loop iteration" agent=deepseek-chat iteration=4 channel=subagent chat_id="subagent-fastclaw 自修复-deepseek-chat"
+time=2026-03-31T20:20:43.439+08:00 level=INFO msg="hook: before model call" agent=deepseek-chat
+time=2026-03-31T20:20:43.440+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-chat
+time=2026-03-31T20:20:54.772+08:00 level=INFO msg="hook: after model call" agent=deepseek-chat elapsed=11.332440083s has_tool_calls=false
+time=2026-03-31T20:20:54.772+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=spawn_subagent elapsed=20.428668s error=<nil>
+time=2026-03-31T20:20:54.773+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=4 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:20:54.773+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:20:54.773+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:20:54.777+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:21:06.598+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=11.82524725s has_tool_calls=true
+time=2026-03-31T20:21:06.599+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:21:06.599+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_5qNBfpErGpMP1RECiqbYxNtv
+time=2026-03-31T20:21:06.625+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=25.935292ms error="exit status 1"
+time=2026-03-31T20:21:06.625+08:00 level=WARN msg="tool execution error" agent="fastclaw 自修复" name=exec error="exit status 1"
+time=2026-03-31T20:21:06.625+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=5 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:21:06.625+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:21:06.625+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:21:06.627+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:21:13.927+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=7.301266958s has_tool_calls=true
+time=2026-03-31T20:21:13.927+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:21:13.927+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_UkJFqNR2MWgXweYMt7w3o00l
+time=2026-03-31T20:21:13.949+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=22.147291ms error=<nil>
+time=2026-03-31T20:21:13.950+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=6 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:21:13.950+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:21:13.950+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:21:13.953+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:21:22.442+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=8.492413583s has_tool_calls=true
+time=2026-03-31T20:21:22.443+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=read_file
+time=2026-03-31T20:21:22.443+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=read_file id=call_00_yJ6iElYECqv2RWjFV3HEEI2K
+time=2026-03-31T20:21:22.444+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=read_file elapsed=696.958µs error=<nil>
+time=2026-03-31T20:21:22.444+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=7 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:21:22.444+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:21:22.444+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:21:22.450+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:22:39.438+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=1m16.993076833s has_tool_calls=true
+time=2026-03-31T20:22:39.438+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=write_file
+time=2026-03-31T20:22:39.438+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=write_file id=call_00_VqrtDpM7RbAVVHEW3pWcyVBt
+time=2026-03-31T20:22:39.439+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=write_file elapsed=707.292µs error=<nil>
+time=2026-03-31T20:22:39.439+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=8 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:22:39.439+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:22:39.439+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:22:39.446+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:22:52.762+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=13.322517417s has_tool_calls=true
+time=2026-03-31T20:22:52.762+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=spawn_subagent
+time=2026-03-31T20:22:52.762+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=spawn_subagent id=call_00_5khAUPmWwlq945sv07yxb6nc
+time=2026-03-31T20:22:52.763+08:00 level=INFO msg="agent loop iteration" agent=deepseek-chat iteration=1 channel=subagent chat_id="subagent-fastclaw 自修复-deepseek-chat"
+time=2026-03-31T20:22:52.763+08:00 level=INFO msg="hook: before model call" agent=deepseek-chat
+time=2026-03-31T20:22:52.763+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-chat
+time=2026-03-31T20:22:55.575+08:00 level=INFO msg="hook: after model call" agent=deepseek-chat elapsed=2.812127792s has_tool_calls=true
+time=2026-03-31T20:22:55.576+08:00 level=INFO msg="hook: before tool call" agent=deepseek-chat tool=exec
+time=2026-03-31T20:22:55.576+08:00 level=INFO msg="executing tool" agent=deepseek-chat name=exec id=call_00_NlfGF8XQtUUhZNYKManAVZ6K
+time=2026-03-31T20:22:55.607+08:00 level=INFO msg="hook: after tool call" agent=deepseek-chat tool=exec elapsed=31.561042ms error=<nil>
+time=2026-03-31T20:22:55.607+08:00 level=INFO msg="agent loop iteration" agent=deepseek-chat iteration=2 channel=subagent chat_id="subagent-fastclaw 自修复-deepseek-chat"
+time=2026-03-31T20:22:55.607+08:00 level=INFO msg="hook: before model call" agent=deepseek-chat
+time=2026-03-31T20:22:55.608+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-chat
+time=2026-03-31T20:23:00.190+08:00 level=INFO msg="hook: after model call" agent=deepseek-chat elapsed=4.582522084s has_tool_calls=false
+time=2026-03-31T20:23:00.191+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=spawn_subagent elapsed=7.42833575s error=<nil>
+time=2026-03-31T20:23:00.191+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=9 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:23:00.191+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:23:00.191+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:23:00.196+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:23:21.107+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=20.916128875s has_tool_calls=true
+time=2026-03-31T20:23:21.108+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:23:21.108+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_SCx6ny1cmk8s1m3wyXn7rsNd
+time=2026-03-31T20:23:21.406+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=298.532541ms error=<nil>
+time=2026-03-31T20:23:21.407+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=10 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:23:21.407+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:23:21.407+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:23:21.407+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:23:36.867+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=15.460202041s has_tool_calls=true
+time=2026-03-31T20:23:36.867+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:23:36.867+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_hMJCvyYA9lxOGDsrbM0mjIcx
+time=2026-03-31T20:23:37.165+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=297.4525ms error=<nil>
+time=2026-03-31T20:23:37.165+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=11 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:23:37.165+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:23:37.165+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:23:37.166+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:24:01.333+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=24.167801125s has_tool_calls=true
+time=2026-03-31T20:24:01.333+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:24:01.333+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_H729HuUXboxOVzEE8ra0rMgA
+time=2026-03-31T20:24:01.359+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=25.295208ms error=<nil>
+time=2026-03-31T20:24:01.359+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=12 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:24:01.359+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:24:01.359+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:24:01.361+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:24:52.929+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=51.569458667s has_tool_calls=true
+time=2026-03-31T20:24:52.929+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:24:52.929+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_lpyBGmqDHm4dqP6dJAz9SDai
+time=2026-03-31T20:24:52.955+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=25.76275ms error=<nil>
+time=2026-03-31T20:24:52.955+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=13 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:24:52.955+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:24:52.955+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:24:52.958+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:25:17.493+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=24.537629333s has_tool_calls=true
+time=2026-03-31T20:25:17.494+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=spawn_subagent
+time=2026-03-31T20:25:17.494+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=spawn_subagent id=call_00_0iR24h3DD7145zbnTorwjs1v
+time=2026-03-31T20:25:17.495+08:00 level=INFO msg="agent loop iteration" agent=deepseek-chat iteration=1 channel=subagent chat_id="subagent-fastclaw 自修复-deepseek-chat"
+time=2026-03-31T20:25:17.495+08:00 level=INFO msg="hook: before model call" agent=deepseek-chat
+time=2026-03-31T20:25:17.495+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-chat
+time=2026-03-31T20:25:21.569+08:00 level=INFO msg="hook: after model call" agent=deepseek-chat elapsed=4.073993208s has_tool_calls=true
+time=2026-03-31T20:25:21.569+08:00 level=INFO msg="hook: before tool call" agent=deepseek-chat tool=exec
+time=2026-03-31T20:25:21.569+08:00 level=INFO msg="executing tool" agent=deepseek-chat name=exec id=call_00_x9o3mTeTzNjja4QOadk66zf2
+time=2026-03-31T20:25:21.605+08:00 level=INFO msg="hook: after tool call" agent=deepseek-chat tool=exec elapsed=35.360416ms error=<nil>
+time=2026-03-31T20:25:21.605+08:00 level=INFO msg="agent loop iteration" agent=deepseek-chat iteration=2 channel=subagent chat_id="subagent-fastclaw 自修复-deepseek-chat"
+time=2026-03-31T20:25:21.605+08:00 level=INFO msg="hook: before model call" agent=deepseek-chat
+time=2026-03-31T20:25:21.605+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-chat
+time=2026-03-31T20:25:28.803+08:00 level=INFO msg="hook: after model call" agent=deepseek-chat elapsed=7.198539208s has_tool_calls=false
+time=2026-03-31T20:25:28.804+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=spawn_subagent elapsed=11.309770166s error=<nil>
+time=2026-03-31T20:25:28.804+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=14 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:25:28.804+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:25:28.804+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:25:28.807+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:26:21.867+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=53.062105917s has_tool_calls=false
+time=2026-03-31T20:31:30.627+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=1 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:31:30.627+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:31:30.627+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:31:30.630+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:32:30.194+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=59.566658833s has_tool_calls=true
+time=2026-03-31T20:32:30.195+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=read_file
+time=2026-03-31T20:32:30.195+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=read_file id=call_00_LggCwtfpHLbkytDs70kJM0kQ
+time=2026-03-31T20:32:30.196+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=read_file elapsed=970.834µs error=<nil>
+time=2026-03-31T20:32:30.196+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=2 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:32:30.196+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:32:30.196+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:32:30.200+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+2026/03/31 20:32:44 Post "https://api.telegram.org/bot8490823744:AAE0jMy0n6c-h41-Zqb4FUQBCw6ySPlYuYA/getUpdates": unexpected EOF
+2026/03/31 20:32:44 Failed to get updates, retrying in 3 seconds...
+time=2026-03-31T20:32:48.972+08:00 level=INFO msg="telegram message received" from=Lola chat_id=8175643861 account="" peer_kind=dm is_bot=false mentions=[] has_photo=false
+time=2026-03-31T20:32:48.972+08:00 level=WARN msg="binding references unknown agent" agentId=fc-zz
+time=2026-03-31T20:32:48.972+08:00 level=WARN msg="no agent matched for DM, dropping" channel=telegram account="" chat_id=8175643861
+time=2026-03-31T20:32:59.218+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=29.021848959s has_tool_calls=true
+time=2026-03-31T20:32:59.220+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=read_file
+time=2026-03-31T20:32:59.220+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=read_file id=call_00_q4dEi3YBS3nFS5rgw423P5Tv
+time=2026-03-31T20:32:59.220+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=read_file elapsed=483.666µs error=<nil>
+time=2026-03-31T20:32:59.221+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=3 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:32:59.221+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:32:59.221+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:32:59.225+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:33:00.244+08:00 level=INFO msg="telegram message received" from=Lola chat_id=8175643861 account="" peer_kind=dm is_bot=false mentions=[] has_photo=false
+time=2026-03-31T20:33:00.244+08:00 level=WARN msg="binding references unknown agent" agentId=fc-zz
+time=2026-03-31T20:33:00.244+08:00 level=WARN msg="no agent matched for DM, dropping" channel=telegram account="" chat_id=8175643861
+time=2026-03-31T20:33:28.660+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=29.4393055s has_tool_calls=true
+time=2026-03-31T20:33:28.661+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:33:28.661+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_ZMWLVkcT7sWvsZKOJYaPm8Ee
+time=2026-03-31T20:33:29.495+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=833.705917ms error=<nil>
+time=2026-03-31T20:33:29.495+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=4 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:33:29.495+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:33:29.495+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:33:29.497+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:36:08.791+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=2m39.294895625s has_tool_calls=true
+time=2026-03-31T20:36:08.791+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=write_file
+time=2026-03-31T20:36:08.791+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=write_file id=call_00_6MFJ6AXqnbIIQ9Qhphzf7roM
+time=2026-03-31T20:36:08.793+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=write_file elapsed=1.172833ms error=<nil>
+time=2026-03-31T20:36:08.793+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=5 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:36:08.793+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:36:08.793+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:36:08.797+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:36:37.492+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=28.698961125s has_tool_calls=true
+time=2026-03-31T20:36:37.494+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:36:37.494+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_QtLBJn4CoACK4jFbAeekgnIQ
+time=2026-03-31T20:36:37.815+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=320.695ms error=<nil>
+time=2026-03-31T20:36:37.815+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=6 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:36:37.815+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:36:37.815+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:36:37.816+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:37:50.141+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=1m12.32570475s has_tool_calls=false
+time=2026-03-31T20:40:13.642+08:00 level=INFO msg="file change detected" file=/Users/leon/.fastclaw/fastclaw.json op=WRITE
+time=2026-03-31T20:40:13.642+08:00 level=INFO msg="file change detected" file="/Users/leon/.fastclaw/agents/fastclaw 自修复/agent/SOUL.md" op=WRITE
+time=2026-03-31T20:40:13.643+08:00 level=INFO msg="file change detected" file="/Users/leon/.fastclaw/agents/fastclaw 自修复/agent/agent.json" op=WRITE
+time=2026-03-31T20:40:14.147+08:00 level=INFO msg="hot-reload: workspace file updated" agent="fastclaw 自修复" file=agent.json
+time=2026-03-31T20:40:53.515+08:00 level=INFO msg="telegram message received" from=Lola chat_id=8175643861 account="" peer_kind=dm is_bot=false mentions=[] has_photo=false
+time=2026-03-31T20:40:53.515+08:00 level=WARN msg="binding references unknown agent" agentId=fc-zz
+time=2026-03-31T20:40:53.515+08:00 level=WARN msg="no agent matched for DM, dropping" channel=telegram account="" chat_id=8175643861
+time=2026-03-31T20:41:48.017+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=1 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:41:48.017+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:41:48.017+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:41:48.020+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:42:21.947+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=33.929662625s has_tool_calls=true
+time=2026-03-31T20:42:21.949+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=read_file
+time=2026-03-31T20:42:21.949+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=read_file id=call_00_Q1JaLZ2mCz0Vh4UAaSffMAps
+time=2026-03-31T20:42:21.949+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=read_file elapsed=230.042µs error=<nil>
+time=2026-03-31T20:42:21.949+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=2 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:42:21.949+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:42:21.949+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:42:21.952+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:42:54.010+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=32.060730709s has_tool_calls=true
+time=2026-03-31T20:42:54.011+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:42:54.011+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_uJc3wCaWj5yw3o47p3x5p552
+time=2026-03-31T20:42:54.029+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=18.189958ms error=<nil>
+time=2026-03-31T20:42:54.029+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=3 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:42:54.029+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:42:54.029+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:42:54.032+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:43:20.486+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=26.443995958s has_tool_calls=true
+time=2026-03-31T20:43:20.487+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=exec
+time=2026-03-31T20:43:20.487+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=exec id=call_00_JuXbEWCC9LqxMgwFhVPkKTUc
+time=2026-03-31T20:43:20.512+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=exec elapsed=25.484125ms error=<nil>
+time=2026-03-31T20:43:20.513+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=4 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:43:20.513+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:43:20.513+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:43:20.515+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:43:47.188+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=26.671410292s has_tool_calls=true
+time=2026-03-31T20:43:47.188+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=read_file
+time=2026-03-31T20:43:47.188+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=read_file id=call_00_ijgDsA5I4qBn91AggxD2kyQI
+time=2026-03-31T20:43:47.189+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=read_file elapsed=803.584µs error=<nil>
+time=2026-03-31T20:43:47.189+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=5 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:43:47.189+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:43:47.189+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:43:47.196+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:44:15.605+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=28.415616416s has_tool_calls=true
+time=2026-03-31T20:44:15.607+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=read_file
+time=2026-03-31T20:44:15.607+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=read_file id=call_00_InjvrXEZaJ8yWgkVfoFMwk73
+time=2026-03-31T20:44:15.607+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=read_file elapsed=325.041µs error=<nil>
+time=2026-03-31T20:44:15.607+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=6 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:44:15.607+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:44:15.607+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:44:15.613+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:45:15.159+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=59.551158125s has_tool_calls=true
+time=2026-03-31T20:45:15.160+08:00 level=INFO msg="hook: before tool call" agent="fastclaw 自修复" tool=write_file
+time=2026-03-31T20:45:15.160+08:00 level=INFO msg="executing tool" agent="fastclaw 自修复" name=write_file id=call_00_u2lnTJk5wJfQmkTgKU6HWp3G
+time=2026-03-31T20:45:15.160+08:00 level=INFO msg="file change detected" file=/Users/leon/.fastclaw/fastclaw.json op=WRITE
+time=2026-03-31T20:45:15.161+08:00 level=INFO msg="hook: after tool call" agent="fastclaw 自修复" tool=write_file elapsed=457.5µs error=<nil>
+time=2026-03-31T20:45:15.161+08:00 level=INFO msg="agent loop iteration" agent="fastclaw 自修复" iteration=7 channel=web chat_id=s-1774951550354-rnv7o3
+time=2026-03-31T20:45:15.161+08:00 level=INFO msg="hook: before model call" agent="fastclaw 自修复"
+time=2026-03-31T20:45:15.161+08:00 level=WARN msg="skipping incomplete assistant message" agent="fastclaw 自修复"
+time=2026-03-31T20:45:15.163+08:00 level=INFO msg="openai request" url=https://api.deepseek.com/v1/chat/completions model=deepseek-reasoner
+time=2026-03-31T20:45:15.662+08:00 level=INFO msg="hot-reloading config..."
+time=2026-03-31T20:45:15.663+08:00 level=INFO msg="hot-reload: agent config updated" id=deepseek-chat model=deepseek-chat
+time=2026-03-31T20:45:15.663+08:00 level=INFO msg="hot-reload: agent config updated" id=zz model=deepseek-reasoner
+time=2026-03-31T20:45:15.663+08:00 level=INFO msg="hot-reload: agent config updated" id="fastclaw 自修复" model=deepseek-reasoner
+time=2026-03-31T20:45:15.663+08:00 level=INFO msg="hot-reload: new agent detected (restart required to add)" id=fc-zz
+time=2026-03-31T20:45:15.663+08:00 level=INFO msg="cron jobs updated (hot-reload)" jobs=0
+time=2026-03-31T20:45:15.663+08:00 level=INFO msg="hot-reload: cron jobs updated" count=0
+time=2026-03-31T20:45:15.663+08:00 level=INFO msg="hot-reload complete ✅"
+time=2026-03-31T20:46:08.147+08:00 level=INFO msg="hook: after model call" agent="fastclaw 自修复" elapsed=52.986346166s has_tool_calls=false
+time=2026-03-31T20:47:43.144+08:00 level=INFO msg="heartbeat tick" agent=zz
+time=2026-03-31T20:47:43.144+08:00 level=INFO msg="heartbeat tick" agent=deepseek-chat
+time=2026-03-31T20:47:43.144+08:00 level=INFO msg="heartbeat tick" agent="fastclaw 自修复"
+time=2026-03-31T20:47:43.145+08:00 level=INFO msg="heartbeat: triggering memory update" agent="fastclaw 自修复"
+time=2026-03-31T20:47:43.145+08:00 level=INFO msg="heartbeat: triggering memory update" agent=zz
+time=2026-03-31T20:47:43.145+08:00 level=INFO msg="heartbeat: triggering memory update" agent=deepseek-chat
+time=2026-03-31T20:48:05.814+08:00 level=INFO msg="received signal, shutting down" signal=terminated
+time=2026-03-31T20:48:05.814+08:00 level=INFO msg="heartbeat stopped" agent=zz
+time=2026-03-31T20:48:05.814+08:00 level=INFO msg="heartbeat stopped" agent="fastclaw 自修复"
+time=2026-03-31T20:48:05.814+08:00 level=INFO msg="heartbeat stopped" agent=deepseek-chat
+time=2026-03-31T20:48:05.814+08:00 level=INFO msg="cron scheduler stopped"
+time=2026-03-31T20:48:05.814+08:00 level=INFO msg="gateway stopped"

@@ -65,8 +65,9 @@ func toAPIMessages(msgs []Message) []apiMessage {
 		if len(m.ContentParts) > 0 {
 			// Multimodal: marshal content as array of parts
 			am.Content, _ = json.Marshal(m.ContentParts)
-		} else if m.Content != "" {
-			// String content
+		} else {
+			// 【关键修复】即使内容是空字符串，也必须设置content字段
+			// 特别是当有tool_calls时，API要求必须有content字段
 			am.Content, _ = json.Marshal(m.Content)
 		}
 		out[i] = am
