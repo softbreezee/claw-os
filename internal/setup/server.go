@@ -98,6 +98,9 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("PUT /api/agents/{id}", s.handleUpdateAgent)
 	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
 
+	// Daemon control
+	mux.HandleFunc("POST /api/daemon/restart", s.handleDaemonRestart)
+
 	// Skills
 	mux.HandleFunc("GET /api/skills", s.handleListSkills)
 	mux.HandleFunc("DELETE /api/skills/{name}", s.handleDeleteSkill)

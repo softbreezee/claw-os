@@ -18,12 +18,35 @@ type execArgs struct {
 	Sandbox bool   `json:"sandbox,omitempty"` // force sandbox for this call
 }
 
-var dangerousCommands = []string{
+const (
+	maxExecOutputBytes = 128 * 1024 // 128 KB cap on tool output sent to LLM
+	maxExecTimeoutSec  = 300        // hard ceiling regardless of what the LLM requests
+)
+
+// dangerousPatterns are regex-like substrings whose presence blocks execution
+// when sandbox is not enabled. The list is intentionally broad.
+var dangerousPatterns = []string{
+	// filesystem destruction
 	"rm -rf /",
+	"rm -rf ~",
+	"rm -rf $home",
+	"rm -rf ${home}",
 	"mkfs",
 	"dd if=",
+	"> /dev/sd",
+	"> /dev/nvme",
+	// fork bombs
 	":(){:|:&};:",
-	"> /dev/sda",
+	":(){ :|:",
+	// privilege escalation helpers
+	"chmod 777 /etc",
+	"chmod 777 /usr",
+	"chown -r root /",
+	"chown -r root /etc",
+	// credential / shadow exfiltration
+	"/etc/shadow",
+	"/etc/passwd",
+	"/etc/sudoers",
 }
 
 // SandboxConfig holds sandbox settings passed to the exec tool registration.
@@ -88,11 +111,14 @@ func makeExecToolFull(sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillD
 			return "", fmt.Errorf("command is required")
 		}
 
-		// Check for dangerous commands
-		lower := strings.ToLower(args.Command)
-		for _, dc := range dangerousCommands {
-			if strings.Contains(lower, dc) {
-				return "", fmt.Errorf("dangerous command blocked: %s", args.Command)
+		// Block dangerous patterns when not running inside a sandbox.
+		useSandbox := args.Sandbox || (sbCfg != nil && sbCfg.Enabled)
+		if !useSandbox {
+			lower := strings.ToLower(args.Command)
+			for _, pat := range dangerousPatterns {
+				if strings.Contains(lower, pat) {
+					return "", fmt.Errorf("dangerous command blocked (enable sandbox to override): matched pattern %q", pat)
+				}
 			}
 		}
 
@@ -100,15 +126,17 @@ func makeExecToolFull(sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillD
 		if args.Timeout > 0 {
 			timeout = args.Timeout
 		}
+		if timeout > maxExecTimeoutSec {
+			timeout = maxExecTimeoutSec
+		}
 
 		execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 		defer cancel()
 
-		// Use sandbox if enabled or forced
-		useSandbox := args.Sandbox || (sbCfg != nil && sbCfg.Enabled)
 		if useSandbox && sbCfg != nil && sbCfg.Pool != nil {
 			sb := sbCfg.Pool.Get(sbCfg.AgentID, sbCfg.Image, sbCfg.Workspace, sbCfg.Policy)
-			return sb.Exec(execCtx, args.Command, "/workspace")
+			out, err := sb.Exec(execCtx, args.Command, "/workspace")
+			return truncateOutput(out), err
 		}
 
 		cmd := exec.CommandContext(execCtx, "sh", "-c", args.Command)
@@ -122,12 +150,10 @@ func makeExecToolFull(sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillD
 		}
 
 		output, err := cmd.CombinedOutput()
-
-		result := string(output)
+		result := truncateOutput(string(output))
 		if err != nil {
 			return fmt.Sprintf("%s\nError: %s", result, err.Error()), err
 		}
-
 		return result, nil
 	}
 }
@@ -152,6 +178,14 @@ func resolveSkillEnv(command string, envProvider SkillEnvProvider, skillDirs []s
 		}
 	}
 	return nil
+}
+
+// truncateOutput caps tool output at maxExecOutputBytes to protect context window.
+func truncateOutput(s string) string {
+	if len(s) <= maxExecOutputBytes {
+		return s
+	}
+	return s[:maxExecOutputBytes] + fmt.Sprintf("\n\n[Output truncated: %d bytes omitted]", len(s)-maxExecOutputBytes)
 }
 
 // mergeEnv merges base env with additional vars. Additional vars override base.

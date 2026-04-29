@@ -1,11 +1,13 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
@@ -20,17 +22,46 @@ const (
 	truncatedPlaceholder = "[Result truncated - see memory logs]"
 )
 
-// EstimateTokens provides a rough token estimate: chars/4.
+// EstimateTokens provides a rough token estimate for a slice of messages.
+// Uses chars/4 for ASCII/Latin content and chars/2 for CJK-heavy content.
 func EstimateTokens(messages []provider.Message) int {
 	total := 0
 	for _, m := range messages {
-		total += len(m.Content) / 4
+		total += estimateStringTokens(m.Content)
 		for _, tc := range m.ToolCalls {
-			total += len(tc.Function.Arguments) / 4
+			total += estimateStringTokens(tc.Function.Arguments)
 			total += len(tc.Function.Name) / 4
 		}
 	}
 	return total
+}
+
+// EstimateTokensWithSystem returns the estimated token count for messages plus
+// a pre-computed system prompt string, so compaction thresholds account for the
+// full context window usage rather than just the message history.
+func EstimateTokensWithSystem(systemPrompt string, messages []provider.Message) int {
+	return estimateStringTokens(systemPrompt) + EstimateTokens(messages)
+}
+
+// estimateStringTokens heuristically estimates tokens for a single string.
+// CJK characters are ~2 chars/token; Latin text is ~4 chars/token.
+func estimateStringTokens(s string) int {
+	if s == "" {
+		return 0
+	}
+	cjk := 0
+	for _, r := range s {
+		if r >= 0x4E00 && r <= 0x9FFF || // CJK Unified Ideographs
+			r >= 0x3000 && r <= 0x303F || // CJK Symbols
+			r >= 0xFF00 && r <= 0xFFEF { // Fullwidth Forms
+			cjk++
+		}
+	}
+	latin := len(s) - cjk*3 // rune→bytes correction
+	if latin < 0 {
+		latin = 0
+	}
+	return cjk/2 + latin/4
 }
 
 // CompactResult holds the result of a compaction operation.
@@ -41,11 +72,12 @@ type CompactResult struct {
 }
 
 // CompactMessages prunes and optionally compresses the message history when it exceeds the token threshold.
+// systemPrompt is included in the token estimate so the full context window usage is accounted for.
 // Step 1 (Pruning): For messages older than PruneTurnAge, strip tool result content.
 // Step 2 (Compression): If still over threshold after pruning, summarize older messages
 // using the LLM and write full history to a log file.
-func CompactMessages(messages []provider.Message, workspace string, prov provider.Provider, model string) (*CompactResult, error) {
-	tokens := EstimateTokens(messages)
+func CompactMessages(ctx context.Context, messages []provider.Message, systemPrompt string, workspace string, prov provider.Provider, model string) (*CompactResult, error) {
+	tokens := EstimateTokensWithSystem(systemPrompt, messages)
 	if tokens < DefaultTokenThreshold {
 		return &CompactResult{Messages: messages}, nil
 	}
@@ -73,7 +105,7 @@ func CompactMessages(messages []provider.Message, workspace string, prov provide
 	}
 
 	// Step 2: Compression - summarize older messages
-	compressed, err := compressOlderMessages(pruned, prov, model)
+	compressed, err := compressOlderMessages(ctx, pruned, prov, model)
 	if err != nil {
 		slog.Warn("compression failed, using pruned messages", "error", err)
 		return &CompactResult{
@@ -117,7 +149,7 @@ func pruneOldToolResults(messages []provider.Message) []provider.Message {
 }
 
 // compressOlderMessages asks the LLM to summarize older messages into a compact summary.
-func compressOlderMessages(messages []provider.Message, prov provider.Provider, model string) ([]provider.Message, error) {
+func compressOlderMessages(ctx context.Context, messages []provider.Message, prov provider.Provider, model string) ([]provider.Message, error) {
 	if len(messages) <= PruneTurnAge {
 		return messages, nil
 	}
@@ -125,33 +157,54 @@ func compressOlderMessages(messages []provider.Message, prov provider.Provider, 
 	cutoff := len(messages) - PruneTurnAge
 	olderMessages := messages[:cutoff]
 
-	// Build a text representation of older messages for summarization
-	var text string
+	// Build a structured text representation including tool call arguments and results.
+	var sb strings.Builder
 	for _, m := range olderMessages {
-		text += fmt.Sprintf("[%s] %s\n", m.Role, m.Content)
+		switch m.Role {
+		case "user":
+			fmt.Fprintf(&sb, "[user] %s\n", m.Content)
+		case "assistant":
+			if m.Content != "" {
+				fmt.Fprintf(&sb, "[assistant] %s\n", m.Content)
+			}
+			for _, tc := range m.ToolCalls {
+				args := tc.Function.Arguments
+				if len(args) > 300 {
+					args = args[:300] + "…"
+				}
+				fmt.Fprintf(&sb, "[tool_call] %s(%s)\n", tc.Function.Name, args)
+			}
+		case "tool":
+			content := m.Content
+			if len(content) > 400 {
+				content = content[:400] + "…"
+			}
+			fmt.Fprintf(&sb, "[tool_result:%s] %s\n", m.Name, content)
+		}
 	}
 
 	summaryPrompt := []provider.Message{
 		{
-			Role:    "system",
-			Content: "You are a conversation summarizer. Summarize the following conversation history into a compact summary that preserves key facts, decisions, and context. Be concise but don't lose important details.",
+			Role: "system",
+			Content: "You are a conversation summarizer. Given a conversation transcript (including tool calls and their results), produce a compact summary that preserves: key decisions made, important facts discovered, tool outputs that matter, and the current state of any ongoing task. Be concise but complete.",
 		},
 		{
 			Role:    "user",
-			Content: fmt.Sprintf("Summarize this conversation:\n\n%s", text),
+			Content: fmt.Sprintf("Summarize this conversation history:\n\n%s", sb.String()),
 		},
 	}
 
-	resp, err := prov.Chat(nil, summaryPrompt, nil, model, 2048, 0.3)
+	resp, err := prov.Chat(ctx, summaryPrompt, nil, model, 2048, 0.3)
 	if err != nil {
 		return nil, fmt.Errorf("summarize conversation: %w", err)
 	}
 
-	// Build new message list: summary + recent messages
+	// Insert summary as a system message so LLMs treat it as background context,
+	// not as a user turn that needs a reply.
 	compressed := make([]provider.Message, 0, PruneTurnAge+1)
 	compressed = append(compressed, provider.Message{
-		Role:    "user",
-		Content: fmt.Sprintf("[Conversation Summary]\n%s", resp.Content),
+		Role:    "system",
+		Content: fmt.Sprintf("[Conversation Summary — earlier history compacted]\n%s", resp.Content),
 	})
 	compressed = append(compressed, messages[cutoff:]...)
 

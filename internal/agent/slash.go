@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -164,7 +165,7 @@ func (a *Agent) slashCompact(msg bus.InboundMessage) slashResult {
 		return slashResult{handled: true, reply: "No messages to compact."}
 	}
 
-	result, err := CompactMessages(sessionMsgs, a.workspacePath, a.provider, a.model)
+	result, err := CompactMessages(context.Background(), sessionMsgs, a.ctxBuilder.BuildSystemPrompt(), a.workspacePath, a.getProvider(), a.model)
 	if err != nil {
 		return slashResult{handled: true, reply: fmt.Sprintf("Compaction error: %v", err)}
 	}

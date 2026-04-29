@@ -8,15 +8,37 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/privacy"
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
 )
 
+// PGMemoryStore is the interface for PostgreSQL-backed memory persistence.
+// Implemented by *pg.MemoryStore; defined here to avoid import cycles.
+type PGMemoryStore interface {
+	Insert(ctx context.Context, agentID, kind, content string, embedding []float32, tags []string) (string, error)
+	LoadAll(ctx context.Context, agentID string) ([]interface{ GetContent() string }, error)
+}
+
 // Memory manages the dual-layer memory system (MEMORY.md + HISTORY.md).
+// When pgStore is set, facts are also persisted to PostgreSQL.
 type Memory struct {
+	mu        sync.Mutex // serialises all file writes to prevent concurrent-write races
 	workspace string
+	agentID   string
+	pgStore   interface {
+		Insert(ctx context.Context, agentID, kind, content string, embedding []float32, tags []string) (string, error)
+	}
+}
+
+// SetPGStore attaches a PostgreSQL memory store for dual-write.
+func (m *Memory) SetPGStore(store interface {
+	Insert(ctx context.Context, agentID, kind, content string, embedding []float32, tags []string) (string, error)
+}, agentID string) {
+	m.agentID = agentID
+	m.pgStore = store
 }
 
 // NewMemory creates a new memory manager.
@@ -45,12 +67,16 @@ func (m *Memory) LoadMemory() string {
 
 // SaveMemory overwrites the long-term memory file.
 func (m *Memory) SaveMemory(content string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	os.MkdirAll(m.workspace, 0o755)
 	return os.WriteFile(m.memoryPath(), []byte(content), 0o644)
 }
 
 // AppendHistory adds an entry to the history log.
 func (m *Memory) AppendHistory(entry string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	os.MkdirAll(m.workspace, 0o755)
 	f, err := os.OpenFile(m.historyPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -169,6 +195,8 @@ func (m *Memory) SaveUserFile(content string) error {
 			)
 		}
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	os.MkdirAll(m.workspace, 0o755)
 	return os.WriteFile(filepath.Join(m.workspace, "USER.md"), []byte(content), 0o644)
 }
@@ -244,41 +272,87 @@ If nothing worth saving, output: {"memory_facts": [], "user_notes": []}`,
 		return
 	}
 
-	// Append new memory facts
+	// Atomically append new memory facts (read-modify-write under lock)
 	if len(result.MemoryFacts) > 0 {
+		mem.mu.Lock()
+		latestMemory := mem.loadMemoryLocked()
 		var memSB strings.Builder
-		memSB.WriteString(currentMemory)
-		if currentMemory != "" && !strings.HasSuffix(currentMemory, "\n") {
+		memSB.WriteString(latestMemory)
+		if latestMemory != "" && !strings.HasSuffix(latestMemory, "\n") {
 			memSB.WriteString("\n")
 		}
 		memSB.WriteString(fmt.Sprintf("\n## Auto-persisted: %s\n", time.Now().Format("2006-01-02 15:04")))
 		for _, fact := range result.MemoryFacts {
 			memSB.WriteString(fmt.Sprintf("- %s\n", fact))
 		}
-		if err := mem.SaveMemoryWithScan(memSB.String()); err != nil {
+		newContent := memSB.String()
+		mem.mu.Unlock()
+
+		if err := mem.SaveMemoryWithScan(newContent); err != nil {
 			slog.Warn("auto-persist: failed to save MEMORY.md", "error", err)
 		} else {
 			slog.Info("auto-persist: updated MEMORY.md", "facts", len(result.MemoryFacts))
 		}
+
+		// Dual-write to PostgreSQL if configured
+		if mem.pgStore != nil {
+			for _, fact := range result.MemoryFacts {
+				if _, err := mem.pgStore.Insert(ctx, mem.agentID, "fact", fact, nil, nil); err != nil {
+					slog.Warn("auto-persist: pg memory insert failed", "error", err)
+				}
+			}
+		}
 	}
 
-	// Append user notes
+	// Atomically append user notes
 	if len(result.UserNotes) > 0 {
+		mem.mu.Lock()
+		latestUser := mem.loadUserFileLocked()
 		var userSB strings.Builder
-		userSB.WriteString(currentUser)
-		if currentUser != "" && !strings.HasSuffix(currentUser, "\n") {
+		userSB.WriteString(latestUser)
+		if latestUser != "" && !strings.HasSuffix(latestUser, "\n") {
 			userSB.WriteString("\n")
 		}
 		userSB.WriteString(fmt.Sprintf("\n## Auto-persisted: %s\n", time.Now().Format("2006-01-02 15:04")))
 		for _, note := range result.UserNotes {
 			userSB.WriteString(fmt.Sprintf("- %s\n", note))
 		}
-		if err := mem.SaveUserFile(userSB.String()); err != nil {
+		newContent := userSB.String()
+		mem.mu.Unlock()
+
+		if err := mem.SaveUserFile(newContent); err != nil {
 			slog.Warn("auto-persist: failed to save USER.md", "error", err)
 		} else {
 			slog.Info("auto-persist: updated USER.md", "notes", len(result.UserNotes))
 		}
+
+		// Dual-write user notes to PostgreSQL
+		if mem.pgStore != nil {
+			for _, note := range result.UserNotes {
+				if _, err := mem.pgStore.Insert(ctx, mem.agentID, "user_note", note, nil, nil); err != nil {
+					slog.Warn("auto-persist: pg user_note insert failed", "error", err)
+				}
+			}
+		}
 	}
+}
+
+// loadMemoryLocked reads MEMORY.md without acquiring the lock (caller must hold it).
+func (m *Memory) loadMemoryLocked() string {
+	data, err := os.ReadFile(m.memoryPath())
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// loadUserFileLocked reads USER.md without acquiring the lock (caller must hold it).
+func (m *Memory) loadUserFileLocked() string {
+	data, err := os.ReadFile(filepath.Join(m.workspace, "USER.md"))
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func truncateStr(s string, n int) string {

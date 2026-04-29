@@ -3,15 +3,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { getStatus, type StatusResponse } from "@/lib/api";
 import {
   Activity,
@@ -23,31 +14,94 @@ import {
   MessageSquare,
   ArrowRight,
   Settings,
+  Cpu,
+  Zap,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
+function StatCard({
+  label,
+  value,
+  sub,
+  icon: Icon,
+  color,
+}: {
+  label: string;
+  value: React.ReactNode;
+  sub?: string;
+  icon: React.ElementType;
+  color: string;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-card p-5 flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-muted-foreground">{label}</span>
+        <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${color}`}>
+          <Icon className="h-4 w-4" />
+        </div>
+      </div>
+      <div>
+        <div className="text-2xl font-semibold tracking-tight">{value}</div>
+        {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
+function QuickAction({
+  href,
+  icon: Icon,
+  iconBg,
+  label,
+  desc,
+}: {
+  href: string;
+  icon: React.ElementType;
+  iconBg: string;
+  label: string;
+  desc: string;
+}) {
+  return (
+    <Link href={href}>
+      <div className="group flex items-center gap-4 rounded-xl border border-border bg-card p-4 transition-all hover:bg-muted/40 hover:border-border/80 hover:shadow-sm">
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${iconBg} transition-transform group-hover:scale-105`}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium leading-tight">{label}</p>
+          <p className="text-xs text-muted-foreground mt-0.5">{desc}</p>
+        </div>
+        <ArrowRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-muted-foreground group-hover:translate-x-0.5 transition-all shrink-0" />
+      </div>
+    </Link>
+  );
+}
 
 export default function OverviewPage() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const fetchStatus = () => {
     setLoading(true);
     getStatus()
-      .then(setStatus)
+      .then((s) => { setStatus(s); setLastUpdated(new Date()); })
       .catch(() => setStatus(null))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 10000);
-    return () => clearInterval(interval);
+    const iv = setInterval(fetchStatus, 10000);
+    return () => clearInterval(iv);
   }, []);
 
   if (loading && !status) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted border-t-primary" />
+      <div className="flex h-full min-h-screen items-center justify-center">
+        <div className="h-7 w-7 animate-spin rounded-full border-2 border-muted border-t-primary" />
       </div>
     );
   }
@@ -57,251 +111,181 @@ export default function OverviewPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Dashboard</h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            Monitor your FastClaw gateway
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {lastUpdated
+              ? `Updated ${lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+              : "Loading…"}
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={fetchStatus}
-        >
-          <RefreshCw
-            className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`}
-          />
+        <Button variant="outline" size="sm" onClick={fetchStatus} disabled={loading}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
           Refresh
         </Button>
       </div>
 
-      {/* Stats Cards */}
+      {/* Stats */}
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
-        {/* Status */}
-        <div className="rounded-lg border border-border bg-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm text-muted-foreground">Status</span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/10">
-              <Activity className="h-4 w-4 text-emerald-500" />
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+        <StatCard
+          label="Status"
+          value={
             <Badge
-              variant={status?.running ? "default" : "secondary"}
               className={
                 status?.running
                   ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/15"
-                  : ""
+                  : "bg-muted text-muted-foreground border-border"
               }
             >
-              <span
-                className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${
-                  status?.running ? "bg-emerald-500" : "bg-muted-foreground"
-                }`}
-              />
-              {status?.running ? "Running" : "Stopped"}
+              {status?.running ? (
+                <><CheckCircle2 className="h-3 w-3 mr-1" /> Running</>
+              ) : (
+                <><XCircle className="h-3 w-3 mr-1" /> Stopped</>
+              )}
             </Badge>
-          </div>
-          {status?.uptime && (
-            <p className="text-xs text-muted-foreground mt-2">
-              Uptime: {status.uptime}
-            </p>
-          )}
-        </div>
-
-        {/* Agents */}
-        <div className="rounded-lg border border-border bg-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm text-muted-foreground">Agents</span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-500/10">
-              <Bot className="h-4 w-4 text-violet-500" />
-            </div>
-          </div>
-          <p className="text-3xl font-semibold tracking-tight">
-            {status?.agents?.length || 0}
-          </p>
-          <p className="text-xs text-muted-foreground mt-1">Active agents</p>
-        </div>
-
-        {/* Channels */}
-        <div className="rounded-lg border border-border bg-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm text-muted-foreground">Channels</span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/10">
-              <Radio className="h-4 w-4 text-blue-500" />
-            </div>
-          </div>
-          <p className="text-3xl font-semibold tracking-tight">
-            {status?.channels?.length || 0}
-          </p>
-          <p className="text-xs text-muted-foreground mt-1">Connected</p>
-        </div>
-
-        {/* Port */}
-        <div className="rounded-lg border border-border bg-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm text-muted-foreground">Port</span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-500/10">
-              <Server className="h-4 w-4 text-amber-500" />
-            </div>
-          </div>
-          <p className="text-3xl font-semibold tracking-tight font-mono">
-            {status?.port || "\u2014"}
-          </p>
-          <p className="text-xs text-muted-foreground mt-1">Gateway port</p>
-        </div>
+          }
+          sub={status?.uptime ? `Uptime: ${status.uptime}` : "Not running"}
+          icon={Activity}
+          color="bg-emerald-500/10 text-emerald-500"
+        />
+        <StatCard
+          label="Agents"
+          value={status?.agents?.length ?? 0}
+          sub="Loaded agents"
+          icon={Bot}
+          color="bg-violet-500/10 text-violet-500"
+        />
+        <StatCard
+          label="Channels"
+          value={status?.channels?.length ?? 0}
+          sub="Connected"
+          icon={Radio}
+          color="bg-blue-500/10 text-blue-500"
+        />
+        <StatCard
+          label="Port"
+          value={<span className="font-mono">{status?.port ?? "—"}</span>}
+          sub="Gateway port"
+          icon={Server}
+          color="bg-amber-500/10 text-amber-500"
+        />
       </div>
 
       {/* Quick Actions */}
-      <div className="grid gap-3 md:grid-cols-3">
-        <Link href="/chat/">
-          <div className="group flex items-center gap-4 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/50">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-500/10 transition-colors group-hover:bg-violet-500/15">
-              <MessageSquare className="h-5 w-5 text-violet-500" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium">Chat</p>
-              <p className="text-xs text-muted-foreground">
-                Talk to your agents
-              </p>
-            </div>
-            <ArrowRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
-          </div>
-        </Link>
-
-        <Link href="/agents/">
-          <div className="group flex items-center gap-4 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/50">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 transition-colors group-hover:bg-blue-500/15">
-              <Bot className="h-5 w-5 text-blue-500" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium">Agents</p>
-              <p className="text-xs text-muted-foreground">
-                Manage agent configs
-              </p>
-            </div>
-            <ArrowRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
-          </div>
-        </Link>
-
-        <Link href="/settings/">
-          <div className="group flex items-center gap-4 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/50">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500/10 transition-colors group-hover:bg-amber-500/15">
-              <Settings className="h-5 w-5 text-amber-500" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium">Settings</p>
-              <p className="text-xs text-muted-foreground">
-                Gateway configuration
-              </p>
-            </div>
-            <ArrowRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
-          </div>
-        </Link>
+      <div>
+        <h2 className="text-sm font-medium text-muted-foreground mb-3">Quick actions</h2>
+        <div className="grid gap-3 md:grid-cols-3">
+          <QuickAction href="/chat/" icon={MessageSquare} iconBg="bg-violet-500/10 text-violet-500" label="Chat" desc="Talk to your agents" />
+          <QuickAction href="/agents/" icon={Bot} iconBg="bg-blue-500/10 text-blue-500" label="Agents" desc="Manage agent configs" />
+          <QuickAction href="/settings/" icon={Settings} iconBg="bg-amber-500/10 text-amber-500" label="Settings" desc="Gateway configuration" />
+        </div>
       </div>
 
-      {/* Agents & Provider */}
+      {/* Agents + Provider */}
       <div className="grid gap-4 md:grid-cols-2">
-        {/* Agents */}
-        <div className="rounded-lg border border-border bg-card">
-          <div className="p-5 pb-3">
-            <div className="flex items-center gap-2 mb-1">
-              <Bot className="h-4 w-4 text-primary" />
-              <h3 className="font-medium">Agents</h3>
+        {/* Agents table */}
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="flex items-center gap-2 px-5 py-4 border-b border-border">
+            <Cpu className="h-4 w-4 text-violet-500" />
+            <h3 className="font-medium text-sm">Agents</h3>
+            <Badge variant="secondary" className="ml-auto font-mono text-[10px]">
+              {status?.agents?.length ?? 0}
+            </Badge>
+          </div>
+          {status?.agents && status.agents.length > 0 ? (
+            <div className="divide-y divide-border/50">
+              {status.agents.map((agent) => (
+                <div key={agent.id} className="flex items-center justify-between px-5 py-3 hover:bg-muted/30 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">
+                      {agent.id[0]?.toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium leading-tight">{agent.id}</p>
+                      <p className="text-[10px] text-muted-foreground font-mono">{agent.model}</p>
+                    </div>
+                  </div>
+                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px]">
+                    Active
+                  </Badge>
+                </div>
+              ))}
             </div>
-            <p className="text-sm text-muted-foreground">
-              Configured AI agents
-            </p>
-          </div>
-          <div className="px-2 pb-2 overflow-x-auto">
-            {status?.agents && status.agents.length > 0 ? (
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="text-muted-foreground h-9">Name</TableHead>
-                    <TableHead className="text-muted-foreground h-9">Model</TableHead>
-                    <TableHead className="text-muted-foreground h-9 text-right">Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {status.agents.map((agent) => (
-                    <TableRow
-                      key={agent.id}
-                      className="hover:bg-muted/50 transition-colors"
-                    >
-                      <TableCell className="font-medium py-2.5">
-                        {agent.id}
-                      </TableCell>
-                      <TableCell className="py-2.5">
-                        <code className="bg-muted px-2 py-0.5 rounded font-mono text-xs">
-                          {agent.model}
-                        </code>
-                      </TableCell>
-                      <TableCell className="text-right py-2.5">
-                        <Badge
-                          variant="outline"
-                          className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
-                        >
-                          Active
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <p className="text-sm text-muted-foreground px-3 pb-3">No agents configured</p>
-            )}
-          </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-10 text-center px-5">
+              <Bot className="h-8 w-8 text-muted-foreground/30 mb-2" />
+              <p className="text-sm text-muted-foreground">No agents configured</p>
+              <Link href="/agents/" className="text-xs text-primary mt-1 hover:underline">Add an agent →</Link>
+            </div>
+          )}
         </div>
 
         {/* Provider */}
-        <div className="rounded-lg border border-border bg-card">
-          <div className="p-5 pb-3">
-            <div className="flex items-center gap-2 mb-1">
-              <Brain className="h-4 w-4 text-amber-500" />
-              <h3 className="font-medium">Provider</h3>
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="flex items-center gap-2 px-5 py-4 border-b border-border">
+            <Brain className="h-4 w-4 text-amber-500" />
+            <h3 className="font-medium text-sm">LLM Provider</h3>
+          </div>
+          {status?.provider ? (
+            <div className="divide-y divide-border/50">
+              {[
+                { label: "Provider", value: status.provider.name || "default", mono: false },
+                { label: "Model", value: status.provider.model, mono: true },
+                { label: "API Base", value: status.provider.apiBase, mono: true },
+                { label: "API Key", value: status.provider.apiKey, mono: true },
+              ].map(({ label, value, mono }) => (
+                <div key={label} className="flex items-center justify-between px-5 py-3">
+                  <span className="text-sm text-muted-foreground">{label}</span>
+                  <span className={`text-sm truncate max-w-[55%] text-right ${mono ? "font-mono text-[12px]" : ""}`}>
+                    {value || "—"}
+                  </span>
+                </div>
+              ))}
             </div>
-            <p className="text-sm text-muted-foreground">
-              LLM provider configuration
-            </p>
-          </div>
-          <div className="px-5 pb-5">
-            {status?.provider ? (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Provider</span>
-                  <span className="text-sm capitalize">
-                    {status.provider.name || "default"}
-                  </span>
-                </div>
-                <Separator />
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Model</span>
-                  <code className="text-sm font-mono bg-muted px-2 py-0.5 rounded">
-                    {status.provider.model}
-                  </code>
-                </div>
-                <Separator />
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">API Base</span>
-                  <span className="text-sm font-mono truncate max-w-48">
-                    {status.provider.apiBase}
-                  </span>
-                </div>
-                <Separator />
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">API Key</span>
-                  <span className="text-sm font-mono">
-                    {status.provider.apiKey}
-                  </span>
-                </div>
-              </div>
-            ) : (
+          ) : (
+            <div className="flex flex-col items-center justify-center py-10 text-center px-5">
+              <Zap className="h-8 w-8 text-muted-foreground/30 mb-2" />
               <p className="text-sm text-muted-foreground">No provider configured</p>
-            )}
-          </div>
+              <Link href="/settings/" className="text-xs text-primary mt-1 hover:underline">Configure →</Link>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Channels */}
+      {status?.channels && status.channels.length > 0 && (
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="flex items-center gap-2 px-5 py-4 border-b border-border">
+            <Radio className="h-4 w-4 text-blue-500" />
+            <h3 className="font-medium text-sm">Channels</h3>
+            <Badge variant="secondary" className="ml-auto font-mono text-[10px]">{status.channels.length}</Badge>
+          </div>
+          <div className="divide-y divide-border/50">
+            {status.channels.map((ch, i) => (
+              <div key={i} className="flex items-center justify-between px-5 py-3 hover:bg-muted/30 transition-colors">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-500/10">
+                    <Radio className="h-3.5 w-3.5 text-blue-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium capitalize">{ch.type}</p>
+                    {ch.botUsername && <p className="text-[10px] text-muted-foreground font-mono">@{ch.botUsername}</p>}
+                  </div>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={
+                    ch.status === "connected" || ch.enabled !== false
+                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px]"
+                      : "bg-muted text-muted-foreground text-[10px]"
+                  }
+                >
+                  {ch.status || (ch.enabled !== false ? "Active" : "Disabled")}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

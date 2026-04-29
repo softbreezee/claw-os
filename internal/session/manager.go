@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,13 +13,28 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
 )
 
+// RemoteStore is an optional backend that persists sessions in addition to
+// (or instead of) JSONL files.  Implement this interface to plug in PostgreSQL
+// or any other store.
+type RemoteStore interface {
+	Load(ctx context.Context, agentID, channel, sessionID string) ([]provider.Message, error)
+	Save(ctx context.Context, agentID, channel, sessionID string, msgs []provider.Message) error
+	Delete(ctx context.Context, agentID, channel, sessionID string) error
+	ListWebSessions(ctx context.Context, agentID string) ([]map[string]string, error)
+}
+
 // Session holds the message history for a channel:chat_id pair.
 type Session struct {
-	mu                sync.Mutex
-	Messages          []provider.Message
-	LastConsolidated  int // index of last consolidated message
-	filePath          string
-	snapshot          []provider.Message // undo snapshot
+	mu               sync.Mutex
+	Messages         []provider.Message
+	LastConsolidated int // index of last consolidated message
+	filePath         string
+	snapshot         []provider.Message // undo snapshot
+	// remote backend fields
+	remote    RemoteStore
+	agentID   string
+	channel   string
+	sessionID string
 }
 
 // Manager manages sessions, keyed by "channel:chat_id".
@@ -26,13 +42,26 @@ type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
 	dataDir  string
+	agentID  string
+	remote   RemoteStore // optional PG/remote backend
 }
 
-// NewManager creates a new session manager.
+// NewManager creates a new session manager backed by JSONL files.
 func NewManager(dataDir string) *Manager {
 	return &Manager{
 		sessions: make(map[string]*Session),
 		dataDir:  dataDir,
+	}
+}
+
+// NewManagerWithRemote creates a session manager that uses a remote store as
+// the primary backend (JSONL files are kept as a local cache/fallback).
+func NewManagerWithRemote(dataDir, agentID string, remote RemoteStore) *Manager {
+	return &Manager{
+		sessions: make(map[string]*Session),
+		dataDir:  dataDir,
+		agentID:  agentID,
+		remote:   remote,
 	}
 }
 
@@ -41,6 +70,7 @@ func sessionKey(channel, chatID string) string {
 }
 
 // Get returns or creates a session for the given channel and chat ID.
+// When a RemoteStore is configured, messages are loaded from PG on first access.
 func (m *Manager) Get(channel, chatID string) *Session {
 	key := sessionKey(channel, chatID)
 
@@ -51,25 +81,46 @@ func (m *Manager) Get(channel, chatID string) *Session {
 		return s
 	}
 
-	// Create new session and load from disk if exists
 	safeKey := strings.ReplaceAll(key, ":", "_")
 	filePath := filepath.Join(m.dataDir, safeKey+".jsonl")
 
 	s := &Session{
 		filePath: filePath,
+		remote:   m.remote,
+		agentID:  m.agentID,
+		channel:  channel,
+		sessionID: chatID,
 	}
-	s.load()
+
+	if m.remote != nil {
+		// Load from remote store; fall back to local file if remote fails.
+		msgs, err := m.remote.Load(context.Background(), m.agentID, channel, chatID)
+		if err == nil && len(msgs) > 0 {
+			s.Messages = msgs
+		} else {
+			s.load()
+		}
+	} else {
+		s.load()
+	}
+
 	m.sessions[key] = s
 	return s
 }
 
-// Append adds a message to the session and persists it.
+// Append adds a message to the session and persists it to all configured backends.
 func (s *Session) Append(msg provider.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.Messages = append(s.Messages, msg)
 	s.appendToFile(msg)
+
+	if s.remote != nil {
+		go func(msgs []provider.Message) {
+			_ = s.remote.Save(context.Background(), s.agentID, s.channel, s.sessionID, msgs)
+		}(append([]provider.Message(nil), s.Messages...))
+	}
 }
 
 // GetMessages returns a copy of all messages.
@@ -106,8 +157,15 @@ func (s *Session) ReplaceMessages(msgs []provider.Message) {
 	copy(s.Messages, msgs)
 	s.LastConsolidated = 0
 
-	// Rewrite the session file
 	s.rewriteFile()
+
+	if s.remote != nil {
+		snapshot := make([]provider.Message, len(msgs))
+		copy(snapshot, msgs)
+		go func() {
+			_ = s.remote.Save(context.Background(), s.agentID, s.channel, s.sessionID, snapshot)
+		}()
+	}
 }
 
 // Clear resets the session messages.
@@ -178,9 +236,18 @@ func (s *Session) appendToFile(msg provider.Message) {
 	f.Write([]byte("\n"))
 }
 
-// ListWebSessions scans session files for web chat sessions and returns
-// a list with id and preview (first user message).
+// ListWebSessions returns web chat sessions. Uses remote store when available.
 func (m *Manager) ListWebSessions() []map[string]string {
+	if m.remote != nil {
+		sessions, err := m.remote.ListWebSessions(context.Background(), m.agentID)
+		if err == nil {
+			return sessions
+		}
+	}
+	return m.listWebSessionsFromFiles()
+}
+
+func (m *Manager) listWebSessionsFromFiles() []map[string]string {
 	pattern := filepath.Join(m.dataDir, "web_*.jsonl")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
@@ -229,9 +296,8 @@ func (m *Manager) ListWebSessions() []map[string]string {
 	return sessions
 }
 
-// DeleteWebSession deletes a web chat session by session ID.
+// DeleteWebSession deletes a web chat session by session ID from all backends.
 func (m *Manager) DeleteWebSession(sessionId string) error {
-	// Remove from in-memory map
 	key := "web:" + sessionId
 	m.mu.Lock()
 	delete(m.sessions, key)
@@ -240,7 +306,13 @@ func (m *Manager) DeleteWebSession(sessionId string) error {
 	// Remove from disk
 	safeKey := strings.ReplaceAll(key, ":", "_")
 	filePath := filepath.Join(m.dataDir, safeKey+".jsonl")
-	return os.Remove(filePath)
+	_ = os.Remove(filePath)
+
+	// Remove from remote store
+	if m.remote != nil {
+		return m.remote.Delete(context.Background(), m.agentID, "web", sessionId)
+	}
+	return nil
 }
 
 // Snapshot saves the current message list as a restore point (for undo).

@@ -19,6 +19,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/cron"
 	"github.com/fastclaw-ai/fastclaw/internal/plugin"
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	pgstore "github.com/fastclaw-ai/fastclaw/internal/store/pg"
 	"github.com/fastclaw-ai/fastclaw/internal/taskqueue"
 	"github.com/fastclaw-ai/fastclaw/internal/webhook"
 )
@@ -30,7 +31,7 @@ type Gateway struct {
 	agents       *agent.Manager
 	chanMgr      *channels.Manager
 	bindings     []config.Binding
-	botUsernames map[string]string          // agentID -> bot username
+	botUsernames map[string]string           // agentID -> bot username
 	teams        map[string]config.TeamEntry // team name -> team config
 	mu           sync.RWMutex
 	dedup        sync.Map                    // dedup key -> dedupEntry
@@ -39,6 +40,7 @@ type Gateway struct {
 	webhookSrv   *webhook.Server
 	pluginMgr    *plugin.Manager
 	taskQueue    *taskqueue.Queue
+	pgDB         *pgstore.DB                 // nil when storage.type != "postgres"
 }
 
 // New creates a new Gateway with multi-agent support.
@@ -81,6 +83,34 @@ func New(cfg *config.Config) (*Gateway, error) {
 	}
 
 	slog.Info("agents loaded", "count", len(resolved), "names", agentMgr.Names())
+
+	// Connect to PostgreSQL if configured and inject PG backend into each agent.
+	var pgDB *pgstore.DB
+	if cfg.Storage.Type == "postgres" && cfg.Storage.DSN != "" {
+		db, err := pgstore.Open(context.Background(), cfg.Storage.DSN)
+		if err != nil {
+			slog.Warn("pg: failed to connect, continuing with file storage", "error", err)
+		} else {
+			if err := db.Migrate(context.Background()); err != nil {
+				slog.Warn("pg: migration failed", "error", err)
+				db.Close()
+			} else {
+				pgDB = db
+				slog.Info("pg: storage backend active")
+				sessionStore := pgstore.NewSessionStore(db)
+				memStore := pgstore.NewMemoryStore(db)
+				pgBackend := &agent.PGBackend{
+					SessionStore:    sessionStore,
+					MemoryStore:     memStore,
+					DBQuerier:       db,
+					SchemaRegistrar: db,
+				}
+				for _, ag := range agentMgr.All() {
+					ag.SetPGBackend(pgBackend)
+				}
+			}
+		}
+	}
 
 	// Create channel manager and register channel instances
 	chanMgr := channels.NewManager(mb)
@@ -223,6 +253,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		scheduler:    scheduler,
 		webhookSrv:   webhookSrv,
 		pluginMgr:    pluginMgr,
+		pgDB:         pgDB,
 	}
 
 	tq := taskqueue.NewQueue(maxConcurrent, taskTimeout, func(ctx context.Context, task *taskqueue.Task) (string, error) {
@@ -392,6 +423,12 @@ func (g *Gateway) Run() error {
 	// Stop plugins on shutdown
 	if g.pluginMgr != nil {
 		g.pluginMgr.StopAll()
+	}
+
+	// Close PostgreSQL connection pool
+	if g.pgDB != nil {
+		g.pgDB.Close()
+		slog.Info("pg: connection pool closed")
 	}
 
 	slog.Info("gateway stopped")

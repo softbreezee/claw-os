@@ -121,6 +121,24 @@ export async function getStatus(): Promise<StatusResponse> {
   return res.json();
 }
 
+// Daemon restart — fires-and-forgets, caller should poll getStatus() afterward
+export async function restartDaemon(): Promise<void> {
+  await fetch("/api/daemon/restart", { method: "POST" }).catch(() => {});
+}
+
+// Poll /api/status until gateway is running again (up to timeoutMs)
+export async function waitForGateway(timeoutMs = 15000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 800));
+    try {
+      const s = await getStatus();
+      if (s.running) return true;
+    } catch { /* still offline */ }
+  }
+  return false;
+}
+
 // Provider
 export async function testProvider(config: { apiBase: string; apiKey: string; model: string; apiType?: string; authType?: string }) {
   const res = await fetch("/api/test-provider", {

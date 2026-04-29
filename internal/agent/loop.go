@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/codeany-ai/open-agent-sdk-go/costtracker"
@@ -25,6 +26,7 @@ import (
 // Agent is the ReAct agent loop.
 type Agent struct {
 	name              string
+	providerMu        sync.RWMutex
 	provider          provider.Provider
 	registry          *tools.Registry
 	sessions          *session.Manager
@@ -50,6 +52,20 @@ type Agent struct {
 	turnCount         int
 	engine            *sdkEngine
 	costTracker       *costtracker.Tracker
+}
+
+// getProvider safely reads the current LLM provider.
+func (a *Agent) getProvider() provider.Provider {
+	a.providerMu.RLock()
+	defer a.providerMu.RUnlock()
+	return a.provider
+}
+
+// setProvider safely replaces the LLM provider.
+func (a *Agent) setProvider(prov provider.Provider) {
+	a.providerMu.Lock()
+	defer a.providerMu.Unlock()
+	a.provider = prov
 }
 
 // NewAgent creates a new Agent from a resolved config.
@@ -190,6 +206,32 @@ func (a *Agent) Name() string {
 	return a.name
 }
 
+// filterOrphanedToolCalls removes assistant messages that have tool_calls but
+// no corresponding tool response in the subsequent messages. Such dangling
+// messages cause API errors with most LLM providers.
+func filterOrphanedToolCalls(msgs []provider.Message) []provider.Message {
+	result := make([]provider.Message, 0, len(msgs))
+	for i, msg := range msgs {
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			hasResponse := false
+			for j := i + 1; j < len(msgs); j++ {
+				if msgs[j].Role == "tool" {
+					hasResponse = true
+					break
+				}
+				if msgs[j].Role == "user" || msgs[j].Role == "system" {
+					break
+				}
+			}
+			if !hasResponse {
+				continue
+			}
+		}
+		result = append(result, msg)
+	}
+	return result
+}
+
 // HandleWebChat handles a chat message from the web UI with a session ID.
 func (a *Agent) HandleWebChat(ctx context.Context, sessionId, text string) string {
 	if sessionId == "" {
@@ -248,6 +290,58 @@ func (a *Agent) InjectGroupMessage(ctx context.Context, msg bus.InboundMessage) 
 func (a *Agent) SetSubAgentSpawner(spawner tools.SubAgentSpawner) {
 	a.subAgentSpawner = spawner
 	tools.RegisterSubAgent(a.registry, spawner, a.name)
+}
+
+// PGBackend groups the PostgreSQL stores that an agent can use.
+type PGBackend struct {
+	SessionStore interface {
+		Load(ctx context.Context, agentID, channel, sessionID string) ([]provider.Message, error)
+		Save(ctx context.Context, agentID, channel, sessionID string, msgs []provider.Message) error
+		Delete(ctx context.Context, agentID, channel, sessionID string) error
+		ListWebSessions(ctx context.Context, agentID string) ([]map[string]string, error)
+	}
+	MemoryStore interface {
+		Insert(ctx context.Context, agentID, kind, content string, embedding []float32, tags []string) (string, error)
+	}
+	DBQuerier interface {
+		QueryRows(ctx context.Context, sql string, args ...any) ([]map[string]any, error)
+		Exec(ctx context.Context, sql string, args ...any) (int64, error)
+	}
+	SchemaRegistrar interface {
+		QueryRows(ctx context.Context, sql string, args ...any) ([]map[string]any, error)
+		Exec(ctx context.Context, sql string, args ...any) (int64, error)
+		RegisterSchema(ctx context.Context, tableName, agentID, purpose, ddl string) error
+	}
+}
+
+// SetPGBackend wires PostgreSQL-backed session, memory, and query stores into
+// the agent. Call this after construction when storage.type = "postgres".
+func (a *Agent) SetPGBackend(pg *PGBackend) {
+	if pg == nil {
+		return
+	}
+	// Replace file-backed session manager with one that dual-writes to PG.
+	if pg.SessionStore != nil {
+		a.sessions = session.NewManagerWithRemote(
+			a.workspacePath+"/sessions",
+			a.name,
+			pg.SessionStore,
+		)
+	}
+	// Attach PG memory store for dual-write of facts.
+	if pg.MemoryStore != nil {
+		a.memory.SetPGStore(pg.MemoryStore, a.name)
+	}
+	// Register db_query tool.
+	if pg.DBQuerier != nil {
+		tools.RegisterDBQuery(a.registry, pg.DBQuerier)
+		slog.Info("pg: db_query tool registered", "agent", a.name)
+	}
+	// Register db_create_table tool.
+	if pg.SchemaRegistrar != nil {
+		tools.RegisterDBCreateTable(a.registry, pg.SchemaRegistrar)
+		slog.Info("pg: db_create_table tool registered", "agent", a.name)
+	}
 }
 
 // ToolRegistry returns the agent's tool registry for external registration.
@@ -372,7 +466,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 
 	// Context compaction: check if session messages are too large
 	sessionMsgs := sess.GetMessages()
-	compactResult, err := CompactMessages(sessionMsgs, a.workspacePath, a.provider, a.model)
+	compactResult, err := CompactMessages(ctx, sessionMsgs, systemPrompt, a.workspacePath, a.getProvider(), a.model)
 	if err != nil {
 		slog.Warn("compaction error", "agent", a.name, "error", err)
 	}
@@ -381,10 +475,24 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		sess.ReplaceMessages(compactResult.Messages)
 		sessionMsgs = compactResult.Messages
 		slog.Info("context compacted", "agent", a.name, "log_file", compactResult.LogFile)
+		// Evict stale FTS entries for this chat and re-index surviving messages.
+		if a.ftsStore != nil {
+			_ = a.ftsStore.DeleteByChat(a.name, msg.ChatID)
+			for _, m := range sessionMsgs {
+				if m.Role == "user" || m.Role == "assistant" {
+					_ = a.ftsStore.Index(a.name, msg.ChatID, m.Role, m.Content, time.Now())
+				}
+			}
+		}
 	}
 
-	messages := make([]provider.Message, 0, len(sessionMsgs)+1)
+	runtimeCtx := a.ctxBuilder.BuildRuntimeContext(msg.Channel, msg.ChatID)
+	messages := make([]provider.Message, 0, len(sessionMsgs)+2)
 	messages = append(messages, provider.Message{Role: "system", Content: systemPrompt})
+	// Inject runtime context as the first user turn so the agent always knows
+	// the current time, channel, and chat ID regardless of conversation length.
+	messages = append(messages, provider.Message{Role: "user", Content: runtimeCtx})
+	messages = append(messages, provider.Message{Role: "assistant", Content: "Understood."})
 	messages = append(messages, sessionMsgs...)
 
 	toolDefs := a.registry.Definitions()
@@ -417,38 +525,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 			llmMessages = privacy.ScrubMessages(messages)
 		}
 
-		// 【关键修复】清理对话历史，确保没有带tool_calls但没有tool响应的assistant消息
-		cleanedMessages := make([]provider.Message, 0, len(llmMessages))
-		for i := 0; i < len(llmMessages); i++ {
-			msg := llmMessages[i]
-			
-			// 如果是带tool calls的assistant消息，检查是否有对应的tool响应
-			if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-				hasToolResponses := false
-				// 检查后面的消息
-				for j := i + 1; j < len(llmMessages); j++ {
-					if llmMessages[j].Role == "tool" {
-						hasToolResponses = true
-						continue
-					}
-					if llmMessages[j].Role == "user" || llmMessages[j].Role == "system" {
-						break
-					}
-				}
-				// 如果没有tool响应，跳过这个assistant消息
-				if !hasToolResponses {
-					slog.Warn("skipping incomplete assistant message", "agent", a.name)
-					continue
-				}
-			}
-			
-			cleanedMessages = append(cleanedMessages, msg)
-		}
-		
-		// 使用清理后的消息
-		llmMessages = cleanedMessages
+		llmMessages = filterOrphanedToolCalls(llmMessages)
 
-		resp, err := a.provider.Chat(ctx, llmMessages, toolDefs, a.model, a.maxTokens, a.temperature)
+		resp, err := a.getProvider().Chat(ctx, llmMessages, toolDefs, a.model, a.maxTokens, a.temperature)
 
 		// Hook: AfterModelCall
 		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime}
@@ -460,7 +539,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		}
 
 		if !resp.HasToolCalls() {
-			sess.Append(provider.Message{Role: "assistant", Content: resp.Content})
+			sess.Append(provider.Message{Role: "assistant", Content: resp.Content, ReasoningContent: resp.ReasoningContent})
 			emitEvent(ctx, ChatEvent{Type: "content", Data: map[string]any{"content": resp.Content}})
 			emitEvent(ctx, ChatEvent{Type: "done"})
 			a.runPostTurn(ctx, messages, totalToolCalls)
@@ -482,9 +561,10 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		}
 
 		assistantMsg := provider.Message{
-			Role:      "assistant",
-			Content:   resp.Content,
-			ToolCalls: resp.ToolCalls,
+			Role:             "assistant",
+			Content:          resp.Content,
+			ReasoningContent: resp.ReasoningContent,
+			ToolCalls:        resp.ToolCalls,
 		}
 		sess.Append(assistantMsg)
 		messages = append(messages, assistantMsg)
@@ -618,7 +698,7 @@ func (a *Agent) runPostTurn(ctx context.Context, messages []provider.Message, to
 		if model == "" {
 			model = a.model
 		}
-		go AutoPersistMemory(ctx, a.memory, a.provider, model, messages)
+		go AutoPersistMemory(ctx, a.memory, a.getProvider(), model, messages)
 	}
 
 	// Skills learner
@@ -662,17 +742,28 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 	sess.Append(userMsg)
 
 	sessionMsgs := sess.GetMessages()
-	compactResult, err := CompactMessages(sessionMsgs, a.workspacePath, a.provider, a.model)
+	compactResult, err := CompactMessages(ctx, sessionMsgs, systemPrompt, a.workspacePath, a.getProvider(), a.model)
 	if err != nil {
 		slog.Warn("compaction error", "agent", a.name, "error", err)
 	}
 	if compactResult != nil && compactResult.Pruned {
 		sess.ReplaceMessages(compactResult.Messages)
 		sessionMsgs = compactResult.Messages
+		if a.ftsStore != nil {
+			_ = a.ftsStore.DeleteByChat(a.name, msg.ChatID)
+			for _, m := range sessionMsgs {
+				if m.Role == "user" || m.Role == "assistant" {
+					_ = a.ftsStore.Index(a.name, msg.ChatID, m.Role, m.Content, time.Now())
+				}
+			}
+		}
 	}
 
-	messages := make([]provider.Message, 0, len(sessionMsgs)+1)
+	runtimeCtx := a.ctxBuilder.BuildRuntimeContext(msg.Channel, msg.ChatID)
+	messages := make([]provider.Message, 0, len(sessionMsgs)+2)
 	messages = append(messages, provider.Message{Role: "system", Content: systemPrompt})
+	messages = append(messages, provider.Message{Role: "user", Content: runtimeCtx})
+	messages = append(messages, provider.Message{Role: "assistant", Content: "Understood."})
 	messages = append(messages, sessionMsgs...)
 
 	toolDefs := a.registry.Definitions()
@@ -689,35 +780,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 		hcBefore := &HookContext{AgentName: a.name, Point: BeforeModelCall, Messages: messages}
 		a.hooks.Run(ctx, hcBefore)
 
-		// 【关键修复】清理对话历史，确保没有带tool_calls但没有tool响应的assistant消息
-		cleanedMessages := make([]provider.Message, 0, len(messages))
-		for i := 0; i < len(messages); i++ {
-			msg := messages[i]
-			
-			// 如果是带tool calls的assistant消息，检查是否有对应的tool响应
-			if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-				hasToolResponses := false
-				// 检查后面的消息
-				for j := i + 1; j < len(messages); j++ {
-					if messages[j].Role == "tool" {
-						hasToolResponses = true
-						continue
-					}
-					if messages[j].Role == "user" || messages[j].Role == "system" {
-						break
-					}
-				}
-				// 如果没有tool响应，跳过这个assistant消息
-				if !hasToolResponses {
-					slog.Warn("skipping incomplete assistant message", "agent", a.name)
-					continue
-				}
-			}
-			
-			cleanedMessages = append(cleanedMessages, msg)
-		}
-		
-		resp, err := a.provider.Chat(ctx, cleanedMessages, toolDefs, a.model, a.maxTokens, a.temperature)
+		resp, err := a.getProvider().Chat(ctx, filterOrphanedToolCalls(messages), toolDefs, a.model, a.maxTokens, a.temperature)
 
 		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime}
 		a.hooks.Run(ctx, hcAfter)
@@ -729,34 +792,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 
 		if !resp.HasToolCalls() {
 			// Final response - use streaming
-			// 【关键修复】清理对话历史，确保没有带tool_calls但没有tool响应的assistant消息
-			cleanedStreamMessages := make([]provider.Message, 0, len(messages))
-			for i := 0; i < len(messages); i++ {
-				msg := messages[i]
-				
-				// 如果是带tool calls的assistant消息，检查是否有对应的tool响应
-				if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-					hasToolResponses := false
-					// 检查后面的消息
-					for j := i + 1; j < len(messages); j++ {
-						if messages[j].Role == "tool" {
-							hasToolResponses = true
-							continue
-						}
-						if messages[j].Role == "user" || messages[j].Role == "system" {
-							break
-						}
-					}
-					// 如果没有tool响应，跳过这个assistant消息
-					if !hasToolResponses {
-						slog.Warn("skipping incomplete assistant message for stream", "agent", a.name)
-						continue
-					}
-				}
-				
-				cleanedStreamMessages = append(cleanedStreamMessages, msg)
-			}
-			sr, err := a.provider.ChatStream(ctx, cleanedStreamMessages, toolDefs, a.model, a.maxTokens, a.temperature)
+			sr, err := a.getProvider().ChatStream(ctx, filterOrphanedToolCalls(messages), toolDefs, a.model, a.maxTokens, a.temperature)
 			if err != nil {
 				slog.Error("LLM stream failed, falling back", "agent", a.name, "error", err)
 				sess.Append(provider.Message{Role: "assistant", Content: resp.Content})
@@ -790,9 +826,10 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 
 		// Tool calls - process concurrently via SDK engine
 		assistantMsg := provider.Message{
-			Role:      "assistant",
-			Content:   resp.Content,
-			ToolCalls: resp.ToolCalls,
+			Role:             "assistant",
+			Content:          resp.Content,
+			ReasoningContent: resp.ReasoningContent,
+			ToolCalls:        resp.ToolCalls,
 		}
 		sess.Append(assistantMsg)
 		messages = append(messages, assistantMsg)

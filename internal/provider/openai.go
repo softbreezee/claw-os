@@ -35,11 +35,14 @@ func NewOpenAI(apiKey, apiBase string) *OpenAIProvider {
 // apiMessage is the wire format for a message sent to the OpenAI API.
 // It uses json.RawMessage for Content to support both string and array formats.
 type apiMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content,omitempty"`
-	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Name       string          `json:"name,omitempty"`
+	Role             string          `json:"role"`
+	Content          json.RawMessage `json:"content,omitempty"`
+	ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID       string          `json:"tool_call_id,omitempty"`
+	Name             string          `json:"name,omitempty"`
+	// ReasoningContent is required by DeepSeek thinking models: the chain-of-thought
+	// returned in a previous response must be echoed back in history messages.
+	ReasoningContent string          `json:"reasoning_content,omitempty"`
 }
 
 type chatRequest struct {
@@ -52,22 +55,22 @@ type chatRequest struct {
 }
 
 // toAPIMessages converts provider Messages to wire-format apiMessages,
-// handling ContentParts for multimodal messages.
+// handling ContentParts for multimodal messages and preserving ReasoningContent
+// for DeepSeek thinking models.
 func toAPIMessages(msgs []Message) []apiMessage {
 	out := make([]apiMessage, len(msgs))
 	for i, m := range msgs {
 		am := apiMessage{
-			Role:       m.Role,
-			ToolCalls:  m.ToolCalls,
-			ToolCallID: m.ToolCallID,
-			Name:       m.Name,
+			Role:             m.Role,
+			ToolCalls:        m.ToolCalls,
+			ToolCallID:       m.ToolCallID,
+			Name:             m.Name,
+			ReasoningContent: m.ReasoningContent,
 		}
 		if len(m.ContentParts) > 0 {
-			// Multimodal: marshal content as array of parts
 			am.Content, _ = json.Marshal(m.ContentParts)
 		} else {
-			// 【关键修复】即使内容是空字符串，也必须设置content字段
-			// 特别是当有tool_calls时，API要求必须有content字段
+			// Even empty strings must be sent as content when tool_calls are present.
 			am.Content, _ = json.Marshal(m.Content)
 		}
 		out[i] = am
@@ -84,9 +87,10 @@ type sseToolCallDelta struct {
 }
 
 type sseDelta struct {
-	Role      string             `json:"role,omitempty"`
-	Content   string             `json:"content,omitempty"`
-	ToolCalls []sseToolCallDelta `json:"tool_calls,omitempty"`
+	Role             string             `json:"role,omitempty"`
+	Content          string             `json:"content,omitempty"`
+	ReasoningContent string             `json:"reasoning_content,omitempty"`
+	ToolCalls        []sseToolCallDelta `json:"tool_calls,omitempty"`
 }
 
 type sseChoice struct {
@@ -255,10 +259,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 func (p *OpenAIProvider) parseSSE(reader io.Reader) (*Response, error) {
 	scanner := bufio.NewScanner(reader)
-	// Increase buffer size for large SSE chunks
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var contentBuilder strings.Builder
+	var reasoningBuilder strings.Builder
 	toolCalls := make(map[int]*ToolCall)
 
 	for scanner.Scan() {
@@ -285,6 +289,10 @@ func (p *OpenAIProvider) parseSSE(reader io.Reader) (*Response, error) {
 
 		if delta.Content != "" {
 			contentBuilder.WriteString(delta.Content)
+		}
+		// Accumulate DeepSeek reasoning_content so it can be echoed back.
+		if delta.ReasoningContent != "" {
+			reasoningBuilder.WriteString(delta.ReasoningContent)
 		}
 
 		for _, tc := range delta.ToolCalls {
@@ -318,7 +326,8 @@ func (p *OpenAIProvider) parseSSE(reader io.Reader) (*Response, error) {
 	}
 
 	result := &Response{
-		Content: contentBuilder.String(),
+		Content:          contentBuilder.String(),
+		ReasoningContent: reasoningBuilder.String(),
 	}
 	for i := 0; i < len(toolCalls); i++ {
 		if tc, ok := toolCalls[i]; ok {
