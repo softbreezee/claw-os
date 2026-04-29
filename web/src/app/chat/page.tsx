@@ -3,8 +3,8 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { getStatus, getChatHistory, getChatSessions, sendChatStream, type AgentInfo, type ChatHistoryMessage, type ChatStreamEvent } from "@/lib/api";
-import { Bot, Send, Copy, Check, SquarePen, MessageSquare, Wrench, ChevronDown, ChevronRight } from "lucide-react";
+import { getStatus, getChatHistory, getChatSessions, sendChatStream, deleteChatSession, type AgentInfo, type ChatHistoryMessage, type ChatStreamEvent } from "@/lib/api";
+import { Bot, Send, Copy, Check, SquarePen, MessageSquare, Wrench, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -257,6 +257,21 @@ export default function ChatPage() {
     setSessionId(sid);
   };
 
+  const handleDeleteSession = async (sid: string) => {
+    if (!selectedAgent) return;
+    
+    try {
+      await deleteChatSession(selectedAgent, sid);
+      loadSessions(selectedAgent);
+      // If the deleted session is the current one, create a new session
+      if (sessionId === sid) {
+        handleNewChat();
+      }
+    } catch (error) {
+      console.error("Failed to delete session:", error);
+    }
+  };
+
   const formatTime = (ts: number) =>
     new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -301,18 +316,29 @@ export default function ChatPage() {
             </div>
             <div className="flex-1 overflow-auto p-2 space-y-1">
               {sessions.map((s) => (
-                <button
+                <div
                   key={s.id}
-                  onClick={() => handleSelectSession(s.id)}
-                  className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
+                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
                     sessionId === s.id
                       ? "bg-primary/10 text-primary"
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                   }`}
                 >
-                  <MessageSquare className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate text-xs">{s.preview}</span>
-                </button>
+                  <button
+                    onClick={() => handleSelectSession(s.id)}
+                    className="flex items-center gap-2 flex-1"
+                  >
+                    <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate text-xs">{s.preview}</span>
+                  </button>
+                  <button
+                    onClick={() => handleDeleteSession(s.id)}
+                    className="opacity-0 hover:opacity-100 p-1 rounded hover:bg-muted/50 transition-all"
+                    title="Delete conversation"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
               ))}
             </div>
           </>

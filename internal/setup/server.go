@@ -23,6 +23,7 @@ type AgentHandle interface {
 	HandleWebChatStream(ctx context.Context, sessionId, text string, events chan<- agent.ChatEvent) string
 	WebChatHistory(sessionId string) []map[string]any
 	WebChatSessions() []map[string]string
+	DeleteWebSession(sessionId string) error
 }
 
 // AgentProvider gives the server access to the running agents.
@@ -89,6 +90,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/chat/stream", s.handleChatStream)
 	mux.HandleFunc("GET /api/chat/history", s.handleChatHistory)
 	mux.HandleFunc("GET /api/chat/sessions", s.handleChatSessions)
+	mux.HandleFunc("DELETE /api/chat/sessions", s.handleDeleteChatSession)
 
 	// Agent management
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)

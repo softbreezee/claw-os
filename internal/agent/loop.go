@@ -325,6 +325,11 @@ func (a *Agent) WebChatSessions() []map[string]string {
 	return a.sessions.ListWebSessions()
 }
 
+// DeleteWebSession deletes a web chat session by session ID.
+func (a *Agent) DeleteWebSession(sessionId string) error {
+	return a.sessions.DeleteWebSession(sessionId)
+}
+
 // Model returns the agent's model name.
 func (a *Agent) Model() string {
 	return a.model

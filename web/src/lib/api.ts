@@ -223,6 +223,13 @@ export async function sendChatStream(
   }
 }
 
+export async function deleteChatSession(agentId: string, sessionId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/chat/sessions?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
 // Agents
 export async function getAgents(): Promise<AgentDetail[]> {
   const res = await fetch("/api/agents");

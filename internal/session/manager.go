@@ -229,6 +229,20 @@ func (m *Manager) ListWebSessions() []map[string]string {
 	return sessions
 }
 
+// DeleteWebSession deletes a web chat session by session ID.
+func (m *Manager) DeleteWebSession(sessionId string) error {
+	// Remove from in-memory map
+	key := "web:" + sessionId
+	m.mu.Lock()
+	delete(m.sessions, key)
+	m.mu.Unlock()
+
+	// Remove from disk
+	safeKey := strings.ReplaceAll(key, ":", "_")
+	filePath := filepath.Join(m.dataDir, safeKey+".jsonl")
+	return os.Remove(filePath)
+}
+
 // Snapshot saves the current message list as a restore point (for undo).
 func (s *Session) Snapshot() {
 	s.mu.Lock()
