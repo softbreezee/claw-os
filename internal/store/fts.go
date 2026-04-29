@@ -119,6 +119,18 @@ func (f *FTSStore) Search(query string, limit int) ([]FTSResult, error) {
 	return results, nil
 }
 
+// DeleteByChat removes all indexed messages for a given agent+chat from both the
+// content table and the FTS5 index. Call this whenever a session's JSONL file
+// is rewritten (e.g. after context compaction) to avoid stale ghost entries.
+func (f *FTSStore) DeleteByChat(agentID, chatID string) error {
+	// FTS5 triggers handle the virtual table cleanup automatically on DELETE.
+	_, err := f.db.Exec(
+		`DELETE FROM messages_content WHERE agent_id = ? AND chat_id = ?`,
+		agentID, chatID,
+	)
+	return err
+}
+
 // Close closes the underlying database.
 func (f *FTSStore) Close() error {
 	return f.db.Close()

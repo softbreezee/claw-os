@@ -7,12 +7,16 @@ import (
 
 // Message represents a chat message.
 type Message struct {
-	Role         string        `json:"role"`
-	Content      string        `json:"content,omitempty"`
-	ContentParts []ContentPart `json:"content_parts,omitempty"`
-	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
-	ToolCallID   string        `json:"tool_call_id,omitempty"`
-	Name         string        `json:"name,omitempty"`
+	Role             string        `json:"role"`
+	Content          string        `json:"content,omitempty"`
+	ContentParts     []ContentPart `json:"content_parts,omitempty"`
+	ToolCalls        []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID       string        `json:"tool_call_id,omitempty"`
+	Name             string        `json:"name,omitempty"`
+	// ReasoningContent holds the chain-of-thought from DeepSeek thinking models.
+	// It must be passed back verbatim in subsequent requests, otherwise the API
+	// returns a 400 "reasoning_content must be passed back" error.
+	ReasoningContent string        `json:"reasoning_content,omitempty"`
 }
 
 // ContentPart represents a part of multimodal content.
@@ -56,8 +60,9 @@ type ToolFunction struct {
 
 // Response is the result of a Chat call.
 type Response struct {
-	Content   string
-	ToolCalls []ToolCall
+	Content          string
+	ReasoningContent string // chain-of-thought from DeepSeek thinking models
+	ToolCalls        []ToolCall
 }
 
 // HasToolCalls returns true if the response contains tool calls.

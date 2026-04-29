@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,13 +24,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { ChevronDown } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -40,20 +34,109 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Bot, Plus, Pencil, Trash2, FolderOpen } from "lucide-react";
-import { getAgents, createAgent, updateAgent, deleteAgent, type AgentDetail } from "@/lib/api";
+import { Bot, Plus, Pencil, Trash2, FolderOpen, Check } from "lucide-react";
+import { getAgents, createAgent, updateAgent, deleteAgent, restartDaemon, waitForGateway, type AgentDetail } from "@/lib/api";
 
-const models = [
-  "gpt-4o",
-  "gpt-4o-mini",
-  "gpt-4-turbo",
-  "claude-sonnet-4-6",
-  "claude-haiku-4-5-20251001",
-  "deepseek-chat",
-  "deepseek-reasoner",
-  "llama-3.1-70b",
-  "qwen-2.5-72b",
+const SUGGESTED_MODELS = [
+  { group: "DeepSeek", models: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"] },
+  { group: "OpenAI", models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"] },
+  { group: "Anthropic", models: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"] },
+  { group: "Open Source", models: ["llama-3.1-70b", "qwen-2.5-72b"] },
 ];
+
+/** Combobox: input box + dropdown suggestions, allows any custom value. */
+function ModelCombobox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [inputVal, setInputVal] = useState(value);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { setInputVal(value); }, [value]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const handleInput = (v: string) => {
+    setInputVal(v);
+    onChange(v);
+    setOpen(true);
+  };
+
+  const handleSelect = (m: string) => {
+    setInputVal(m);
+    onChange(m);
+    setOpen(false);
+  };
+
+  const flatModels = SUGGESTED_MODELS.flatMap(g => g.models);
+  const filtered = inputVal
+    ? SUGGESTED_MODELS.map(g => ({
+        ...g,
+        models: g.models.filter(m => m.toLowerCase().includes(inputVal.toLowerCase())),
+      })).filter(g => g.models.length > 0)
+    : SUGGESTED_MODELS;
+
+  return (
+    <div ref={ref} className="relative">
+      <div className="relative">
+        <Input
+          value={inputVal}
+          onChange={(e) => handleInput(e.target.value)}
+          onFocus={() => setOpen(true)}
+          placeholder="e.g. deepseek-v4-flash"
+          className="pr-8 font-mono text-sm"
+        />
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+      </div>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-popover shadow-lg overflow-hidden">
+          <div className="max-h-64 overflow-y-auto py-1">
+            {filtered.map((group) => (
+              <div key={group.group}>
+                <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                  {group.group}
+                </p>
+                {group.models.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => handleSelect(m)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-sm font-mono hover:bg-muted/60 transition-colors text-left"
+                  >
+                    <Check className={`h-3.5 w-3.5 shrink-0 ${value === m ? "text-primary opacity-100" : "opacity-0"}`} />
+                    {m}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {filtered.length === 0 && (
+              <p className="px-3 py-2 text-xs text-muted-foreground italic">
+                No suggestions — press Enter to use "{inputVal}"
+              </p>
+            )}
+          </div>
+          {inputVal && !flatModels.includes(inputVal) && (
+            <div className="border-t border-border px-3 py-2">
+              <p className="text-[10px] text-muted-foreground/60">
+                Custom model — will be sent as-is to the API
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentDetail[]>([]);
@@ -63,6 +146,7 @@ export default function AgentsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [restarting, setRestarting] = useState(false);
 
   const [newName, setNewName] = useState("");
   const [newModel, setNewModel] = useState("gpt-4o");
@@ -89,9 +173,15 @@ export default function AgentsPage() {
     await createAgent({ id: newName.trim(), model: newModel, soul: newSoul });
     setCreateOpen(false);
     setNewName("");
-    setNewModel("gpt-4o");
+    setNewModel("deepseek-v4-flash");
     setNewSoul("");
     setSaving(false);
+
+    // Restart daemon so the new agent is loaded, then refresh the list
+    setRestarting(true);
+    await restartDaemon();
+    await waitForGateway(15000);
+    setRestarting(false);
     fetchAgents();
   };
 
@@ -120,6 +210,12 @@ export default function AgentsPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
+      {restarting && (
+        <div className="flex items-center gap-3 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+          <div className="h-4 w-4 shrink-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+          <span className="text-primary font-medium">Restarting gateway to load new agent…</span>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-semibold tracking-tight">Agents</h2>
@@ -258,18 +354,7 @@ export default function AgentsPage() {
             </div>
             <div className="space-y-2">
               <Label>Model</Label>
-              <Select value={newModel} onValueChange={(v) => v && setNewModel(v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {models.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {m}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ModelCombobox value={newModel} onChange={setNewModel} />
             </div>
             <div className="space-y-2">
               <Label>Personality (SOUL.md)</Label>
@@ -315,18 +400,7 @@ export default function AgentsPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Model</Label>
-                <Select value={editModel} onValueChange={(v) => v && setEditModel(v)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {models.map((m) => (
-                      <SelectItem key={m} value={m}>
-                        {m}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <ModelCombobox value={editModel} onChange={setEditModel} />
               </div>
               <div className="space-y-2">
                 <Label>Workspace</Label>

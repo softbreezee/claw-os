@@ -459,13 +459,14 @@ func checkGating(meta *SkillMetadata) (bool, string) {
 	return false, ""
 }
 
-// fastclawManagedDir returns the FastClaw managed skills directory (~/.fastclaw/skills/).
+// fastclawManagedDir returns the FastClaw managed skills directory (~/.fastclaw/managed-skills/).
+// This is separate from user-installed skills (~/.fastclaw/skills/) to avoid layer collision.
 func fastclawManagedDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".fastclaw", "skills")
+	return filepath.Join(home, ".fastclaw", "managed-skills")
 }
 
 func expandPath(path string) string {

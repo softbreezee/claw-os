@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 )
@@ -54,9 +55,12 @@ func makeSubAgentTool(spawner SubAgentSpawner, callerAgentID string) ToolFunc {
 			return "", fmt.Errorf("cannot spawn yourself as a sub-agent")
 		}
 
+		// Each delegation gets a unique session so history doesn't accumulate
+		// across repeated calls and the sub-agent starts with a clean slate.
+		sessionID := fmt.Sprintf("subagent-%s-%s-%d", callerAgentID, args.AgentID, time.Now().UnixNano())
 		msg := bus.InboundMessage{
 			Channel:  "subagent",
-			ChatID:   fmt.Sprintf("subagent-%s-%s", callerAgentID, args.AgentID),
+			ChatID:   sessionID,
 			UserID:   callerAgentID,
 			Text:     args.Task,
 			PeerKind: "dm",

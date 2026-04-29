@@ -81,7 +81,7 @@ func makeReadFile(workspace string) ToolFunc {
 			return "", fmt.Errorf("read file: %w", err)
 		}
 
-		return string(data), nil
+		return truncateOutput(string(data)), nil
 	}
 }
 

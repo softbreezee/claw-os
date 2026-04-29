@@ -113,11 +113,10 @@ func RegisterPluginHooks(ctx context.Context, mgr *Manager, pluginID string, reg
 // buildHookFireParams constructs HookFireParams from a HookContext.
 func buildHookFireParams(pointName string, hc *agent.HookContext) HookFireParams {
 	params := HookFireParams{
-		Point:     pointName,
-		AgentName: hc.AgentName,
-		ChatID:    hc.ChatID,
-		ToolName:  hc.ToolName,
-		ToolArgs:  hc.ToolArgs,
+		Point:      pointName,
+		AgentName:  hc.AgentName,
+		ToolName:   hc.ToolName,
+		ToolArgs:   hc.ToolArgs,
 		ToolResult: hc.ToolResult,
 	}
 

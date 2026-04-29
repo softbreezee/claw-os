@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
 )
@@ -77,12 +78,16 @@ func (r *Registry) GetFunc(name string) ToolFunc {
 	return t.fn
 }
 
-// Definitions returns all tool definitions for the LLM.
+// Definitions returns all tool definitions for the LLM in stable alphabetical order.
+// A consistent ordering prevents non-deterministic tool selection in the model.
 func (r *Registry) Definitions() []provider.Tool {
 	defs := make([]provider.Tool, 0, len(r.tools))
 	for _, t := range r.tools {
 		defs = append(defs, t.def)
 	}
+	sort.Slice(defs, func(i, j int) bool {
+		return defs[i].Function.Name < defs[j].Function.Name
+	})
 	return defs
 }
 

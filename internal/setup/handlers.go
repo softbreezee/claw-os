@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fastclaw-ai/fastclaw/internal/daemon"
+
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 )
@@ -671,6 +673,32 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		result = append(result, entry)
 	}
 	jsonResponse(w, http.StatusOK, result)
+}
+
+// handleDaemonRestart stops the running daemon and relaunches it with the same
+// port. The restart is async — the response is sent before the process exits,
+// so the caller should poll /api/status until the gateway comes back up.
+func (s *Server) handleDaemonRestart(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true, "message": "restarting"})
+
+	// Flush the response before killing ourselves.
+	if fl, ok := w.(http.Flusher); ok {
+		fl.Flush()
+	}
+
+	port := s.port
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		slog.Info("daemon restart requested via API", "port", port)
+		_ = daemonRestart(port)
+	}()
+}
+
+// daemonRestart stops the current daemon and starts a new one.
+func daemonRestart(port int) error {
+	_ = daemon.Stop()
+	time.Sleep(800 * time.Millisecond)
+	return daemon.Start(port)
 }
 
 // saveConfigFile persists the config to ~/.fastclaw/fastclaw.json.
