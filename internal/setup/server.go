@@ -203,6 +203,15 @@ type spaHandler struct {
 func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
+	// Critical: do NOT serve the SPA for /api/* requests. If we did, an
+	// unknown API path would silently return 200 + index.html, masking
+	// 404s and breaking client error handling (a stale frontend hitting
+	// a deleted endpoint would never realise it failed).
+	if strings.HasPrefix(path, "/api/") {
+		http.NotFound(w, r)
+		return
+	}
+
 	// Strip trailing slash (except root) to normalize
 	if path != "/" && strings.HasSuffix(path, "/") {
 		path = strings.TrimSuffix(path, "/")
