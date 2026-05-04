@@ -7,7 +7,10 @@ import {
   getStatus,
   getChatHistory,
   getChatSessions,
-  sendChatStream,
+  submitChat,
+  subscribeTaskEvents,
+  cancelTask,
+  getTask,
   deleteChatSession,
   type AgentInfo,
   type ChatHistoryMessage,
@@ -61,6 +64,10 @@ interface RuntimeState {
   sending: boolean;
   messages: ChatMessage[];
   abort?: () => void;
+  // PR2: server-side task ID for the in-flight request. Set when
+  // submitChat resolves; cleared on terminal events. Also used to
+  // re-subscribe after a tab switch (see useEffect below).
+  taskId?: string;
   // Streaming accumulators – kept here (not in component locals) so the
   // background SSE handler can keep writing into the right tab even when
   // the user is looking at a different one.
@@ -222,6 +229,97 @@ export default function ChatPage() {
     }
   }, [input]);
 
+  // streamTaskEvents wires a task subscription into the per-tab runtime.
+  // Used by both handleSend (fresh tasks) and the resume effect (tabs the
+  // user navigated away from while a task was running). Encapsulates all
+  // the SSE event → runtime mutation logic so both call sites stay sane.
+  const streamTaskEvents = useCallback(
+    async (key: string, taskId: string, ctrl: AbortController) => {
+      const startNewGroup = () => {
+        const r = runtimesRef.current[key];
+        if (!r) return;
+        r.curGroupId = `tg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        r.curCalls = [];
+        r.curContent = "";
+      };
+
+      try {
+        await subscribeTaskEvents(taskId, (evt: ChatStreamEvent) => {
+          const r = runtimesRef.current[key];
+          if (!r) return;
+          switch (evt.type) {
+            case "content": {
+              const content = evt.data?.content || "";
+              if (r.curCalls.length > 0) startNewGroup();
+              r.curContent = content;
+              updateRuntime(key, (cur) => ({
+                ...cur,
+                messages: [...cur.messages, { id: `a-${Date.now()}`, role: "agent", content, timestamp: Date.now() }],
+              }));
+              break;
+            }
+            case "tool_call": {
+              r.curCalls.push({ id: evt.data?.id || "", name: evt.data?.name || "", arguments: evt.data?.arguments || "{}" });
+              const groupId = r.curGroupId;
+              const calls = [...r.curCalls];
+              const content = r.curContent;
+              updateRuntime(key, (cur) => {
+                const last = cur.messages[cur.messages.length - 1];
+                if (content && last?.role === "agent" && last.content === content) {
+                  return { ...cur, messages: [...cur.messages.slice(0, -1), { id: groupId, role: "tool-group" as const, content, timestamp: Date.now(), toolCalls: calls }] };
+                }
+                const idx = cur.messages.findIndex((m) => m.id === groupId);
+                if (idx >= 0) {
+                  const u = [...cur.messages]; u[idx] = { ...u[idx], toolCalls: calls };
+                  return { ...cur, messages: u };
+                }
+                return { ...cur, messages: [...cur.messages, { id: groupId, role: "tool-group" as const, content, timestamp: Date.now(), toolCalls: calls }] };
+              });
+              break;
+            }
+            case "tool_result": {
+              const tc = r.curCalls.find((c) => c.id === (evt.data?.id || ""));
+              if (tc) tc.result = evt.data?.result || "";
+              const groupId = r.curGroupId;
+              const calls = [...r.curCalls];
+              updateRuntime(key, (cur) => {
+                const idx = cur.messages.findIndex((m) => m.id === groupId);
+                if (idx < 0) return cur;
+                const u = [...cur.messages]; u[idx] = { ...u[idx], toolCalls: calls };
+                return { ...cur, messages: u };
+              });
+              break;
+            }
+            // task_done / task_error / task_cancelled are handled in
+            // the finally block below via runtime cleanup. We don't
+            // need to surface them as messages.
+          }
+        }, ctrl.signal);
+      } finally {
+        // Cleanup runtime: clear sending flag, drop abort func, mark
+        // any never-completed tool calls as cancelled so spinners stop.
+        updateRuntime(key, (cur) => ({
+          ...cur,
+          sending: false,
+          abort: undefined,
+          taskId: undefined,
+          messages: cur.messages.map((m) => {
+            if (m.role !== "tool-group" || !m.toolCalls) return m;
+            const hasUnfinished = m.toolCalls.some((tc) => tc.result == null);
+            if (!hasUnfinished) return m;
+            return {
+              ...m,
+              toolCalls: m.toolCalls.map((tc) =>
+                tc.result == null ? { ...tc, result: "[cancelled]", error: true } : tc
+              ),
+            };
+          }),
+        }));
+      }
+    },
+    [updateRuntime],
+  );
+
   const handleSend = useCallback(async (text?: string) => {
     const msg = (text ?? input).trim();
     if (!msg || !selectedAgent) return;
@@ -236,9 +334,8 @@ export default function ChatPage() {
     const userMsgId = `u-${Date.now()}`;
     const initialGroupId = `tg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
-    // Real cancellation: AbortController propagates all the way to the Go
-    // backend's r.Context(), which kills the LLM call AND any inflight tool
-    // subprocesses (exec.CommandContext already honours ctx).
+    // ctrl.abort() unsubscribes the SSE stream. The actual task cancel
+    // (kill subprocess on the server) is sent via cancelTask in handleStop.
     const ctrl = new AbortController();
 
     updateRuntime(key, (r) => ({
@@ -251,71 +348,21 @@ export default function ChatPage() {
       curContent: "",
     }));
 
-    // Helper: mutate the streaming accumulators in-place via runtimesRef so
-    // the SSE callback doesn't suffer from stale closures across re-renders.
-    const startNewGroup = () => {
-      const r = runtimesRef.current[key];
-      if (!r) return;
-      r.curGroupId = `tg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      r.curCalls = [];
-      r.curContent = "";
-    };
-
     try {
-      await sendChatStream(agentForReq, sessionForReq, msg, (evt: ChatStreamEvent) => {
-        const r = runtimesRef.current[key];
-        if (!r) return;
-        switch (evt.type) {
-          case "content": {
-            const content = evt.data?.content || "";
-            if (r.curCalls.length > 0) startNewGroup();
-            r.curContent = content;
-            updateRuntime(key, (cur) => ({
-              ...cur,
-              messages: [...cur.messages, { id: `a-${Date.now()}`, role: "agent", content, timestamp: Date.now() }],
-            }));
-            break;
-          }
-          case "tool_call": {
-            r.curCalls.push({ id: evt.data?.id || "", name: evt.data?.name || "", arguments: evt.data?.arguments || "{}" });
-            const groupId = r.curGroupId;
-            const calls = [...r.curCalls];
-            const content = r.curContent;
-            updateRuntime(key, (cur) => {
-              const last = cur.messages[cur.messages.length - 1];
-              if (content && last?.role === "agent" && last.content === content) {
-                return { ...cur, messages: [...cur.messages.slice(0, -1), { id: groupId, role: "tool-group" as const, content, timestamp: Date.now(), toolCalls: calls }] };
-              }
-              const idx = cur.messages.findIndex((m) => m.id === groupId);
-              if (idx >= 0) {
-                const u = [...cur.messages]; u[idx] = { ...u[idx], toolCalls: calls };
-                return { ...cur, messages: u };
-              }
-              return { ...cur, messages: [...cur.messages, { id: groupId, role: "tool-group" as const, content, timestamp: Date.now(), toolCalls: calls }] };
-            });
-            break;
-          }
-          case "tool_result": {
-            const tc = r.curCalls.find((c) => c.id === (evt.data?.id || ""));
-            if (tc) tc.result = evt.data?.result || "";
-            const groupId = r.curGroupId;
-            const calls = [...r.curCalls];
-            updateRuntime(key, (cur) => {
-              const idx = cur.messages.findIndex((m) => m.id === groupId);
-              if (idx < 0) return cur;
-              const u = [...cur.messages]; u[idx] = { ...u[idx], toolCalls: calls };
-              return { ...cur, messages: u };
-            });
-            break;
-          }
-        }
-      }, ctrl.signal);
+      const { taskId } = await submitChat(agentForReq, sessionForReq, msg);
+      // Persist taskId BEFORE subscribing so handleStop knows what to
+      // cancel and the resume effect can find this in-flight task.
+      updateRuntime(key, (cur) => ({ ...cur, taskId }));
+      await streamTaskEvents(key, taskId, ctrl);
       loadSessions(agentForReq);
     } catch (err) {
       const aborted = (err as Error)?.name === "AbortError" || ctrl.signal.aborted;
       if (!aborted) {
         updateRuntime(key, (cur) => ({
           ...cur,
+          sending: false,
+          abort: undefined,
+          taskId: undefined,
           messages: [
             ...cur.messages,
             { id: `e-${Date.now()}`, role: "agent", content: "⚠️ Failed to get a response. Is the gateway running?", timestamp: Date.now() },
@@ -323,37 +370,54 @@ export default function ChatPage() {
         }));
       }
     } finally {
-      // Mark any tool calls that never got a result as cancelled so the UI
-      // stops spinning (fixes the "Running tools..." stuck state).
-      updateRuntime(key, (cur) => ({
-        ...cur,
-        sending: false,
-        abort: undefined,
-        messages: cur.messages.map((m) => {
-          if (m.role !== "tool-group" || !m.toolCalls) return m;
-          const hasUnfinished = m.toolCalls.some((tc) => tc.result == null);
-          if (!hasUnfinished) return m;
-          return {
-            ...m,
-            toolCalls: m.toolCalls.map((tc) =>
-              tc.result == null ? { ...tc, result: "[cancelled]", error: true } : tc
-            ),
-          };
-        }),
-      }));
-      // Only refocus the input if the user is still looking at this tab.
       if (rtKey(selectedAgent, sessionId) === key) {
         textareaRef.current?.focus();
       }
     }
-  }, [input, selectedAgent, sessionId, loadSessions, updateRuntime]);
+  }, [input, selectedAgent, sessionId, loadSessions, updateRuntime, streamTaskEvents]);
 
   const handleStop = useCallback(() => {
     const r = runtimesRef.current[currentKey];
+    // Server-side cancel kills the subprocess + stops the LLM call.
+    // Fire-and-forget; the backend marks the task cancelled regardless
+    // of whether the response reaches us.
+    if (r?.taskId) {
+      cancelTask(r.taskId).catch(() => { /* idempotent on backend */ });
+    }
+    // Local abort unsubscribes the SSE stream → triggers streamTaskEvents'
+    // finally block → cleans up the runtime.
     r?.abort?.();
-    // sending will be flipped to false in handleSend's finally; abort will
-    // make the fetch reject with AbortError and trigger that path.
   }, [currentKey]);
+
+  // Resume effect: when the user navigates back to a tab whose task is
+  // still running (or finished while away), re-subscribe so the UI keeps
+  // updating. Without this, switching away mid-stream would orphan the
+  // task and the user would never see the result.
+  useEffect(() => {
+    if (!selectedAgent || !sessionId) return;
+    const key = rtKey(selectedAgent, sessionId);
+    const r = runtimesRef.current[key];
+    if (!r?.taskId || r.sending) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const t = await getTask(r.taskId!);
+        if (cancelled) return;
+        if (t.status === "running" || t.status === "pending") {
+          const ctrl = new AbortController();
+          updateRuntime(key, (cur) => ({ ...cur, sending: true, abort: () => ctrl.abort() }));
+          await streamTaskEvents(key, t.id, ctrl);
+        } else {
+          // Already terminal – just clear residual state.
+          updateRuntime(key, (cur) => ({ ...cur, taskId: undefined, sending: false }));
+        }
+      } catch {
+        // Task disappeared (e.g. server restart). Drop the dangling ref.
+        updateRuntime(key, (cur) => ({ ...cur, taskId: undefined, sending: false }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedAgent, sessionId, updateRuntime, streamTaskEvents]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }

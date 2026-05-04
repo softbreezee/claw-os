@@ -16,8 +16,11 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/api"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/daemon"
+	"github.com/fastclaw-ai/fastclaw/internal/eventbus"
 	"github.com/fastclaw-ai/fastclaw/internal/gateway"
 	"github.com/fastclaw-ai/fastclaw/internal/setup"
+	"github.com/fastclaw-ai/fastclaw/internal/store"
+	"github.com/fastclaw-ai/fastclaw/internal/taskrunner"
 )
 
 func main() {
@@ -101,6 +104,32 @@ func runGateway(port int) error {
 	webSrv.SetTaskQueue(gw.TaskQueue())
 	webSrv.SetGatewayConfig(gwCfg)
 
+	// Wire up the async web chat task subsystem (PR2):
+	//   web UI POST /api/chat/submit  →  taskrunner.Submit
+	//                                 →  agent.HandleWebChatStream
+	//                                 →  events streamed via eventbus to
+	//                                    GET /api/chat/tasks/:id/events
+	// We construct a separate store.Store here (the gateway uses its own
+	// pg backend for sessions, but doesn't expose a generic Store). For
+	// the file backend this is essentially zero-cost; for SQLite/Postgres
+	// it opens a second connection pool, which is fine.
+	homeDir, _ := config.HomeDir()
+	chatTaskStore, storeErr := store.New(&store.StorageConfig{
+		Type:        store.StorageType(cfg.Storage.Type),
+		DSN:         cfg.Storage.DSN,
+		AutoMigrate: cfg.Storage.AutoMigrate,
+	}, homeDir)
+	if storeErr != nil {
+		slog.Warn("chat task store init failed; async chat tasks disabled", "err", storeErr)
+	} else {
+		evtBus := eventbus.NewMemoryBus()
+		runner := taskrunner.New(chatTaskStore, evtBus,
+			&chatTaskAgentResolver{mgr: gw.AgentManager()},
+			taskrunner.Options{TenantID: store.DefaultTenantID})
+		webSrv.SetChatTaskRunner(runner, evtBus, chatTaskStore, store.DefaultTenantID)
+		slog.Info("chat task subsystem ready")
+	}
+
 	// Set up OpenAI-compatible API and WebSocket gateway
 	gatewayToken := cfg.Gateway.Auth.Token
 	apiSrv := api.NewServer(gw.AgentManager(), gatewayToken, gwCfg)
@@ -154,6 +183,22 @@ func (a *agentProviderAdapter) AllAgents() []setup.AgentHandle {
 
 func (a *agentProviderAdapter) AgentByID(id string) setup.AgentHandle {
 	ag := a.mgr.AgentByID(id)
+	if ag == nil {
+		return nil
+	}
+	return ag
+}
+
+// chatTaskAgentResolver adapts agent.Manager to the (much narrower)
+// taskrunner.AgentResolver contract. We can't pass the manager directly
+// because its AgentByID returns *agent.Agent and Go interface satisfaction
+// requires the exact return type.
+type chatTaskAgentResolver struct {
+	mgr *agent.Manager
+}
+
+func (r *chatTaskAgentResolver) AgentByID(id string) taskrunner.AgentHandle {
+	ag := r.mgr.AgentByID(id)
 	if ag == nil {
 		return nil
 	}

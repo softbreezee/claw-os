@@ -257,6 +257,129 @@ export async function sendChatStream(
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PR2: Async chat task API (submit → subscribe → cancel).
+// Co-exists with the legacy sendChatStream above; new code should use this.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ChatTaskStatus = "pending" | "running" | "done" | "failed" | "cancelled";
+
+export interface ChatTaskRecord {
+  id: string;
+  agentId: string;
+  sessionKey: string;
+  status: ChatTaskStatus;
+  message: string;
+  result?: string;
+  error?: string;
+  createdAt: string;
+  startedAt?: string;
+  doneAt?: string;
+  updatedAt: string;
+}
+
+// submitChat enqueues a new chat task and returns its taskId.
+// Does NOT wait for the agent to respond; subscribe via subscribeTaskEvents.
+export async function submitChat(
+  agentId: string,
+  sessionId: string,
+  message: string,
+): Promise<{ taskId: string; status: ChatTaskStatus }> {
+  const res = await fetch("/api/chat/submit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentId, sessionId, message }),
+  });
+  if (!res.ok) throw new Error(`submit failed: ${res.status}`);
+  return res.json();
+}
+
+// subscribeTaskEvents opens an SSE connection for a task. Resolves when
+// the bus closes the topic (terminal event received) or the abort signal
+// fires. Safe to call repeatedly for the same taskId – each call gets
+// its own subscription.
+export async function subscribeTaskEvents(
+  taskId: string,
+  onEvent: (evt: ChatStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`/api/chat/tasks/${encodeURIComponent(taskId)}/events`, { signal });
+  if (!res.ok || !res.body) {
+    throw new Error(`subscribe failed: ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  // Same abort-propagation pattern used by sendChatStream.
+  const onAbort = () => { reader.cancel().catch(() => {}); };
+  if (signal) {
+    if (signal.aborted) {
+      await reader.cancel().catch(() => {});
+      throw new DOMException("Aborted", "AbortError");
+    }
+    signal.addEventListener("abort", onAbort);
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const evt = JSON.parse(line.slice(6)) as ChatStreamEvent;
+          onEvent(evt);
+        } catch { /* skip */ }
+      }
+    }
+  } finally {
+    if (signal) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+// cancelTask asks the backend to cancel an in-flight task. Idempotent –
+// returns ok even for already-terminal tasks.
+export async function cancelTask(taskId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/chat/tasks/${encodeURIComponent(taskId)}/cancel`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`cancel failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getTask(taskId: string): Promise<ChatTaskRecord> {
+  const res = await fetch(`/api/chat/tasks/${encodeURIComponent(taskId)}`);
+  if (!res.ok) throw new Error(`get task failed: ${res.status}`);
+  return res.json();
+}
+
+export async function listTasks(filters?: {
+  agentId?: string;
+  sessionKey?: string;
+  status?: ChatTaskStatus;
+  limit?: number;
+  offset?: number;
+}): Promise<{ tasks: ChatTaskRecord[]; total: number }> {
+  const params = new URLSearchParams();
+  if (filters?.agentId) params.append("agentId", filters.agentId);
+  if (filters?.sessionKey) params.append("sessionKey", filters.sessionKey);
+  if (filters?.status) params.append("status", filters.status);
+  if (filters?.limit) params.append("limit", String(filters.limit));
+  if (filters?.offset) params.append("offset", String(filters.offset));
+  const res = await fetch(`/api/chat/tasks?${params}`);
+  if (!res.ok) throw new Error(`list tasks failed: ${res.status}`);
+  return res.json();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export async function deleteChatSession(agentId: string, sessionId: string): Promise<{ ok: boolean }> {
   const res = await fetch(`/api/chat/sessions?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`, {
     method: "DELETE",

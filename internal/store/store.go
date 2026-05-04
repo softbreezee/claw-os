@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -47,9 +48,22 @@ type Store interface {
 	LockCronJob(ctx context.Context, jobID, instanceID string) (bool, error)
 	UpdateCronJobRun(ctx context.Context, jobID string, lastRun, nextRun time.Time) error
 
+	// Tasks (web chat async tasks).
+	// FileStore implements only the per-task methods; ListChatTasks returns
+	// ErrNotSupported on file backend so callers should feature-detect.
+	CreateChatTask(ctx context.Context, tenantID string, task *ChatTaskRecord) error
+	UpdateChatTask(ctx context.Context, tenantID string, task *ChatTaskRecord) error
+	GetChatTask(ctx context.Context, tenantID, taskID string) (*ChatTaskRecord, error)
+	ListChatTasks(ctx context.Context, tenantID string, filters ChatTaskFilters) ([]ChatTaskRecord, error)
+	DeleteChatTask(ctx context.Context, tenantID, taskID string) error
+
 	// Close releases resources.
 	Close() error
 }
+
+// ErrNotSupported is returned by Store backends that don't implement an
+// optional method (e.g. FileStore.ListChatTasks).
+var ErrNotSupported = errors.New("operation not supported by this storage backend")
 
 // CronJobRecord holds a scheduled job.
 type CronJobRecord struct {
@@ -117,6 +131,45 @@ type MemoryEntry struct {
 	Role      string    `json:"role"`
 	Content   string    `json:"content"`
 	SessionID string    `json:"sessionId,omitempty"`
+}
+
+// ChatTaskStatus is the lifecycle state of a web chat task.
+// Distinct from internal/taskqueue.TaskStatus (which models IM task queue);
+// kept separate so the two systems can evolve independently.
+type ChatTaskStatus string
+
+const (
+	ChatTaskPending   ChatTaskStatus = "pending"
+	ChatTaskRunning   ChatTaskStatus = "running"
+	ChatTaskDone      ChatTaskStatus = "done"
+	ChatTaskFailed    ChatTaskStatus = "failed"
+	ChatTaskCancelled ChatTaskStatus = "cancelled"
+)
+
+// ChatTaskRecord is one persisted web chat task. Web chat tasks are the
+// async unit of work created by POST /api/chat/submit; see internal/taskrunner.
+type ChatTaskRecord struct {
+	ID         string         `json:"id"`
+	TenantID   string         `json:"tenantId"`
+	AgentID    string         `json:"agentId"`
+	SessionKey string         `json:"sessionKey"`
+	Status     ChatTaskStatus `json:"status"`
+	Message    string         `json:"message"`           // user input
+	Result     string         `json:"result,omitempty"`  // final assistant reply
+	Error      string         `json:"error,omitempty"`   // error message if failed
+	CreatedAt  time.Time      `json:"createdAt"`
+	StartedAt  *time.Time     `json:"startedAt,omitempty"`
+	DoneAt     *time.Time     `json:"doneAt,omitempty"`
+	UpdatedAt  time.Time      `json:"updatedAt"`
+}
+
+// ChatTaskFilters narrows ListChatTasks results.
+type ChatTaskFilters struct {
+	AgentID    string         // optional, exact match
+	SessionKey string         // optional, exact match
+	Status     ChatTaskStatus // optional, exact match
+	Limit      int            // 0 = backend default (typically 50)
+	Offset     int
 }
 
 // StorageType identifies the storage backend.

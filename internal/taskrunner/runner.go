@@ -1,0 +1,340 @@
+// Package taskrunner runs web chat messages as asynchronous tasks.
+//
+// Web chat tasks differ from IM tasks (internal/taskqueue):
+//
+//   * They are HTTP-driven but their lifetime exceeds the HTTP request:
+//     a task keeps running even if the SSE client disconnects, and a
+//     reconnecting client can resume by re-subscribing to the EventBus
+//     topic for that task.
+//
+//   * They have an independent context that can be cancelled by an
+//     explicit POST /api/chat/tasks/:id/cancel call. The HTTP request
+//     context is not used for cancellation – disconnect != cancel.
+//
+//   * Per-(agent, session) FIFO serialisation keeps ordering and avoids
+//     concurrent mutation of session history.
+//
+// The Runner emits two kinds of events on the bus topic "task:{taskID}":
+//   - Lifecycle: task_pending, task_running, task_cancelled, task_done,
+//     task_error (these are also persisted to the chat_tasks table)
+//   - Streaming: content, tool_call, tool_result, done (forwarded
+//     verbatim from agent.HandleWebChatStream's events channel)
+package taskrunner
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/fastclaw-ai/fastclaw/internal/eventbus"
+	"github.com/fastclaw-ai/fastclaw/internal/store"
+)
+
+// AgentResolver finds an agent by ID. The taskrunner package does not
+// depend on internal/agent.Manager directly – callers inject any type
+// that satisfies this minimal contract, which avoids an import cycle
+// (Manager already imports many internal/* packages).
+type AgentResolver interface {
+	AgentByID(id string) AgentHandle
+}
+
+// AgentHandle is the slice of *agent.Agent that the runner needs.
+// HandleWebChatStream blocks until the conversation turn is complete
+// and returns the final assistant content; events are streamed via the
+// channel argument while it runs.
+type AgentHandle interface {
+	HandleWebChatStream(ctx context.Context, sessionID, text string, events chan<- agent.ChatEvent) string
+}
+
+// Runner is the package's main type. Construct with New, drive with
+// Submit, shut down cleanly with Stop.
+type Runner struct {
+	store    store.Store
+	bus      eventbus.Bus
+	resolver AgentResolver
+	tenantID string
+	timeout  time.Duration
+
+	mu       sync.Mutex
+	queues   map[string]*sessionQueue // sessionKey(agentID:sessionID) -> queue
+	inflight map[string]*runningTask  // taskID -> currently executing task
+	seq      uint64
+
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
+}
+
+// runningTask holds the cancel func of a task currently being executed,
+// so POST /api/chat/tasks/:id/cancel can interrupt it. Pending tasks
+// (waiting in the per-session queue) don't need this; they're cancelled
+// by setting their status before the worker picks them up.
+type runningTask struct {
+	cancel context.CancelFunc
+}
+
+// Options tweaks Runner behaviour. Zero values are sensible defaults.
+type Options struct {
+	// TenantID for all tasks the runner creates. Default "default".
+	TenantID string
+	// Timeout caps a single task's execution. Default 5 minutes (matches
+	// existing internal/taskqueue.Queue and avoids lingering ghost tasks).
+	Timeout time.Duration
+}
+
+// New constructs a Runner. The caller must call Stop when shutting down.
+func New(s store.Store, bus eventbus.Bus, resolver AgentResolver, opts Options) *Runner {
+	if opts.TenantID == "" {
+		opts.TenantID = store.DefaultTenantID
+	}
+	if opts.Timeout <= 0 {
+		opts.Timeout = 5 * time.Minute
+	}
+	rootCtx, cancel := context.WithCancel(context.Background())
+	return &Runner{
+		store:      s,
+		bus:        bus,
+		resolver:   resolver,
+		tenantID:   opts.TenantID,
+		timeout:    opts.Timeout,
+		queues:     make(map[string]*sessionQueue),
+		inflight:   make(map[string]*runningTask),
+		rootCtx:    rootCtx,
+		rootCancel: cancel,
+	}
+}
+
+// Stop signals all per-session worker goroutines to exit and cancels
+// any in-flight tasks. Safe to call multiple times.
+func (r *Runner) Stop() {
+	r.rootCancel()
+}
+
+// TopicFor returns the eventbus topic name used for a given task.
+// Exposed so HTTP handlers can subscribe to the right topic.
+func TopicFor(taskID string) string {
+	return "task:" + taskID
+}
+
+// Submit enqueues a new chat task and returns its ID. The task is
+// processed asynchronously – Submit never blocks waiting for the agent.
+//
+// agentID and sessionID identify the agent and session; message is the
+// user's input. The returned taskID can be used to subscribe via
+// eventbus, query state via store, or cancel via Cancel.
+func (r *Runner) Submit(ctx context.Context, agentID, sessionID, message string) (string, error) {
+	if r.resolver.AgentByID(agentID) == nil {
+		return "", fmt.Errorf("unknown agent: %s", agentID)
+	}
+
+	r.mu.Lock()
+	r.seq++
+	taskID := fmt.Sprintf("ct-%d-%d", time.Now().UnixMilli(), r.seq)
+	r.mu.Unlock()
+
+	now := time.Now().UTC()
+	rec := &store.ChatTaskRecord{
+		ID:         taskID,
+		TenantID:   r.tenantID,
+		AgentID:    agentID,
+		SessionKey: sessionID,
+		Status:     store.ChatTaskPending,
+		Message:    message,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := r.store.CreateChatTask(ctx, r.tenantID, rec); err != nil {
+		return "", fmt.Errorf("persist task: %w", err)
+	}
+
+	// Pending event for any subscriber that's already listening (rare but
+	// possible when callers Subscribe immediately after Submit).
+	r.bus.Publish(ctx, TopicFor(taskID), eventbus.Event{
+		Type:      "task_pending",
+		Data:      map[string]any{"taskId": taskID},
+		Timestamp: now,
+	})
+
+	r.enqueue(rec)
+	return taskID, nil
+}
+
+// Cancel attempts to cancel a task. If the task is currently running,
+// its context is cancelled (which propagates through to in-flight LLM
+// calls and exec subprocesses via exec.CommandContext). If pending in
+// the queue, it'll be skipped when the worker picks it up.
+//
+// Returns nil even if the task is already terminal – cancel is idempotent.
+func (r *Runner) Cancel(ctx context.Context, taskID string) error {
+	rec, err := r.store.GetChatTask(ctx, r.tenantID, taskID)
+	if err != nil {
+		return fmt.Errorf("get task: %w", err)
+	}
+	if isTerminal(rec.Status) {
+		return nil // idempotent: already done/failed/cancelled
+	}
+
+	// Mark cancelled so a queued worker will skip it.
+	rec.Status = store.ChatTaskCancelled
+	now := time.Now().UTC()
+	rec.DoneAt = &now
+	if err := r.store.UpdateChatTask(ctx, r.tenantID, rec); err != nil {
+		slog.Warn("taskrunner: persist cancel failed", "task", taskID, "err", err)
+	}
+
+	// Cancel in-flight context if any.
+	r.mu.Lock()
+	rt, running := r.inflight[taskID]
+	r.mu.Unlock()
+	if running && rt.cancel != nil {
+		rt.cancel()
+	}
+
+	r.bus.Publish(ctx, TopicFor(taskID), eventbus.Event{
+		Type:      "task_cancelled",
+		Data:      map[string]any{"taskId": taskID},
+		Timestamp: now,
+	})
+	return nil
+}
+
+func isTerminal(s store.ChatTaskStatus) bool {
+	switch s {
+	case store.ChatTaskDone, store.ChatTaskFailed, store.ChatTaskCancelled:
+		return true
+	}
+	return false
+}
+
+// run executes a single task. Called by the per-session worker.
+//
+// Lifecycle:
+//   1. Skip immediately if the task was already cancelled while pending.
+//   2. Mark running, persist, emit task_running.
+//   3. Set up an independent (ctx, cancel) so an external Cancel() call
+//      can interrupt the agent. Also enforce r.timeout.
+//   4. Spawn agent.HandleWebChatStream in a goroutine, forward its
+//      events to the bus.
+//   5. On completion: persist done/failed/cancelled, emit terminal event.
+func (r *Runner) run(rec *store.ChatTaskRecord) {
+	ctx0 := r.rootCtx
+	// Re-fetch to honour any cancel that arrived while the task was
+	// pending in the queue.
+	cur, err := r.store.GetChatTask(ctx0, r.tenantID, rec.ID)
+	if err == nil && cur.Status == store.ChatTaskCancelled {
+		// Already cancelled before we got a chance to start – terminal
+		// event has been emitted by Cancel(); nothing more to do.
+		return
+	}
+
+	taskCtx, taskCancel := context.WithTimeout(ctx0, r.timeout)
+	defer taskCancel()
+
+	r.mu.Lock()
+	r.inflight[rec.ID] = &runningTask{cancel: taskCancel}
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.inflight, rec.ID)
+		r.mu.Unlock()
+	}()
+
+	startedAt := time.Now().UTC()
+	rec.Status = store.ChatTaskRunning
+	rec.StartedAt = &startedAt
+	if uerr := r.store.UpdateChatTask(taskCtx, r.tenantID, rec); uerr != nil {
+		slog.Warn("taskrunner: mark running failed", "task", rec.ID, "err", uerr)
+	}
+	r.bus.Publish(taskCtx, TopicFor(rec.ID), eventbus.Event{
+		Type:      "task_running",
+		Data:      map[string]any{"taskId": rec.ID},
+		Timestamp: startedAt,
+	})
+
+	ah := r.resolver.AgentByID(rec.AgentID)
+	if ah == nil {
+		r.finishWithError(rec, fmt.Errorf("agent disappeared: %s", rec.AgentID))
+		return
+	}
+
+	// Bridge: agent emits ChatEvent on a channel; we forward each to the
+	// bus as an eventbus.Event. Buffer of 32 matches the size used by
+	// the existing /api/chat/stream handler – consistent jitter tolerance.
+	events := make(chan agent.ChatEvent, 32)
+	var (
+		result    string
+		streamErr error
+	)
+	go func() {
+		defer close(events)
+		defer func() {
+			if rec := recover(); rec != nil {
+				streamErr = fmt.Errorf("agent panic: %v", rec)
+			}
+		}()
+		result = ah.HandleWebChatStream(taskCtx, rec.SessionKey, rec.Message, events)
+	}()
+
+	for evt := range events {
+		r.bus.Publish(taskCtx, TopicFor(rec.ID), eventbus.Event{
+			Type:      evt.Type,
+			Data:      evt.Data,
+			Timestamp: time.Now().UTC(),
+		})
+	}
+
+	// Determine terminal state. Prefer ctx error (cancel/timeout) over
+	// stream error so users see "cancelled" rather than a confusing
+	// downstream "context deadline exceeded".
+	if streamErr == nil {
+		if cerr := taskCtx.Err(); cerr != nil {
+			streamErr = cerr
+		}
+	}
+
+	switch {
+	case errors.Is(streamErr, context.Canceled):
+		// Cancel() already wrote the cancelled state and emitted the event.
+		// Avoid double-publishing.
+		return
+	case errors.Is(streamErr, context.DeadlineExceeded):
+		r.finishWithError(rec, fmt.Errorf("timed out after %s", r.timeout))
+	case streamErr != nil:
+		r.finishWithError(rec, streamErr)
+	default:
+		r.finishOK(rec, result)
+	}
+}
+
+func (r *Runner) finishOK(rec *store.ChatTaskRecord, result string) {
+	now := time.Now().UTC()
+	rec.Status = store.ChatTaskDone
+	rec.Result = result
+	rec.DoneAt = &now
+	if uerr := r.store.UpdateChatTask(r.rootCtx, r.tenantID, rec); uerr != nil {
+		slog.Warn("taskrunner: persist done failed", "task", rec.ID, "err", uerr)
+	}
+	r.bus.Publish(r.rootCtx, TopicFor(rec.ID), eventbus.Event{
+		Type:      "task_done",
+		Data:      map[string]any{"taskId": rec.ID, "result": result},
+		Timestamp: now,
+	})
+}
+
+func (r *Runner) finishWithError(rec *store.ChatTaskRecord, err error) {
+	now := time.Now().UTC()
+	rec.Status = store.ChatTaskFailed
+	rec.Error = err.Error()
+	rec.DoneAt = &now
+	if uerr := r.store.UpdateChatTask(r.rootCtx, r.tenantID, rec); uerr != nil {
+		slog.Warn("taskrunner: persist failed-state failed", "task", rec.ID, "err", uerr)
+	}
+	r.bus.Publish(r.rootCtx, TopicFor(rec.ID), eventbus.Event{
+		Type:      "task_error",
+		Data:      map[string]any{"taskId": rec.ID, "error": err.Error()},
+		Timestamp: now,
+	})
+}
