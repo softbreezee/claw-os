@@ -110,7 +110,6 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/test-provider", s.handleTestProvider)
 	mux.HandleFunc("POST /api/save-config", s.handleSaveConfig)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
-	mux.HandleFunc("POST /api/chat/stream", s.handleChatStream)
 	mux.HandleFunc("POST /api/chat/submit", s.handleChatSubmit)
 	mux.HandleFunc("GET /api/chat/tasks", s.handleListChatTasks)
 	mux.HandleFunc("GET /api/chat/tasks/{id}", s.handleGetChatTask)

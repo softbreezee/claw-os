@@ -333,8 +333,7 @@ func (r *Runner) run(rec *store.ChatTaskRecord) {
 	}
 
 	// Bridge: agent emits ChatEvent on a channel; we forward each to the
-	// bus as an eventbus.Event. Buffer of 32 matches the size used by
-	// the existing /api/chat/stream handler – consistent jitter tolerance.
+	// bus as an eventbus.Event. Buffer of 32 covers typical SSE jitter.
 	events := make(chan agent.ChatEvent, 32)
 	var (
 		result    string

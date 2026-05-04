@@ -34,8 +34,7 @@ import (
 // by the producer (see TaskRunner). It enables resumable subscribers –
 // a reconnecting client passes its last-seen Seq via ?after=N and the
 // handler replays buffered events with greater Seq before subscribing
-// to live updates. Seq is 0 for legacy producers that don't number their
-// events; consumers should treat 0 as "no resume info".
+// to live updates.
 type Event struct {
 	Seq       int64          `json:"seq,omitempty"`
 	Type      string         `json:"type"`

@@ -1,8 +1,6 @@
 package setup
 
-// HTTP handlers for the async web chat task subsystem (PR2). The legacy
-// /api/chat/stream endpoint in handlers.go is preserved for backwards
-// compatibility; new clients should use the submit + subscribe flow.
+// HTTP handlers for the async web chat task subsystem.
 
 import (
 	"encoding/json"
@@ -17,8 +15,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/taskrunner"
 )
 
-// chatSubmitRequest mirrors the legacy chatRequest but is decoded
-// independently so we can evolve the new API without breaking the old.
+// chatSubmitRequest is the wire format of POST /api/chat/submit.
 type chatSubmitRequest struct {
 	AgentID   string `json:"agentId"`
 	SessionID string `json:"sessionId"`
@@ -141,10 +138,10 @@ func (s *Server) handleChatTaskEvents(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			// De-dup: bus may deliver an event that we already replayed
-			// from history. Compare by seq (assigned monotonically by
-			// publishEvent).
-			if evt.Seq != 0 && evt.Seq <= maxReplayedSeq {
+			// De-dup: bus may deliver an event we already replayed
+			// from history. publishEvent always assigns Seq>=1, so a
+			// straight comparison is enough.
+			if evt.Seq <= maxReplayedSeq {
 				continue
 			}
 			writeSSEEvent(w, flusher, evt)
@@ -286,10 +283,8 @@ func snapshotEvent(rec *store.ChatTaskRecord) eventbus.Event {
 	}
 }
 
-// writeSSEEvent emits one event in the standard SSE wire format.
-// Uses fmt.Fprintf rather than the SSE-event syntax because the
-// existing /api/chat/stream handler already standardised on a single
-// "data:" line per event – the frontend parser expects that format.
+// writeSSEEvent emits one event in the standard SSE wire format
+// (single "data:" line per event, terminated by an empty line).
 func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, evt eventbus.Event) {
 	data, err := json.Marshal(evt)
 	if err != nil {

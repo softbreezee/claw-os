@@ -201,9 +201,10 @@ export async function sendChat(agentId: string, sessionId: string, message: stri
   return res.json();
 }
 
+// ChatStreamEvent is a single SSE event from the chat task subsystem.
+// task_* events mark lifecycle transitions; content / tool_call / tool_result
+// stream agent output.
 export interface ChatStreamEvent {
-  // Task lifecycle types are emitted only by the new submit/subscribe API
-  // (PR2). The legacy /api/chat/stream only emits content/tool_call/tool_result/done.
   type:
     | "content"
     | "tool_call"
@@ -215,65 +216,12 @@ export interface ChatStreamEvent {
     | "task_error"
     | "task_cancelled";
   data?: Record<string, string>;
-  // PR3: monotonic per-task sequence used for resumable subscriptions.
-  // Absent on legacy /api/chat/stream events.
+  // Monotonic per-task sequence – used for resumable subscriptions.
   seq?: number;
 }
 
-export async function sendChatStream(
-  agentId: string,
-  sessionId: string,
-  message: string,
-  onEvent: (evt: ChatStreamEvent) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const res = await fetch("/api/chat/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agentId, sessionId, message }),
-    signal,
-  });
-  if (!res.ok || !res.body) throw new Error("stream failed");
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  // Propagate abort to the reader so the in-flight read() rejects promptly.
-  const onAbort = () => { reader.cancel().catch(() => {}); };
-  if (signal) {
-    if (signal.aborted) {
-      await reader.cancel().catch(() => {});
-      throw new DOMException("Aborted", "AbortError");
-    }
-    signal.addEventListener("abort", onAbort);
-  }
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        try {
-          const evt = JSON.parse(line.slice(6)) as ChatStreamEvent;
-          onEvent(evt);
-        } catch { /* skip */ }
-      }
-    }
-  } finally {
-    if (signal) signal.removeEventListener("abort", onAbort);
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// PR2: Async chat task API (submit → subscribe → cancel).
-// Co-exists with the legacy sendChatStream above; new code should use this.
+// Async chat task API (submit → subscribe → cancel).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type ChatTaskStatus = "pending" | "running" | "done" | "failed" | "cancelled";
@@ -335,7 +283,7 @@ export async function subscribeTaskEvents(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  // Same abort-propagation pattern used by sendChatStream.
+  // Propagate abort to the reader so the in-flight read() rejects promptly.
   const onAbort = () => { reader.cancel().catch(() => {}); };
   if (signal) {
     if (signal.aborted) {
