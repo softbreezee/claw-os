@@ -17,7 +17,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -157,9 +156,9 @@ export default function SkillsPage() {
                         <MoveRight className="h-3.5 w-3.5" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-52">
-                        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                        <div className="px-1.5 py-1 text-[10px] uppercase tracking-wider text-muted-foreground/70 select-none">
                           Move to
-                        </DropdownMenuLabel>
+                        </div>
                         <DropdownMenuItem
                           onClick={() => handleMove(skill, "user")}
                           disabled={isAtScope(skill, "user")}
