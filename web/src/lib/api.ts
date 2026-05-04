@@ -211,11 +211,13 @@ export async function sendChatStream(
   sessionId: string,
   message: string,
   onEvent: (evt: ChatStreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agentId, sessionId, message }),
+    signal,
   });
   if (!res.ok || !res.body) throw new Error("stream failed");
 
@@ -223,21 +225,35 @@ export async function sendChatStream(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      try {
-        const evt = JSON.parse(line.slice(6)) as ChatStreamEvent;
-        onEvent(evt);
-      } catch { /* skip */ }
+  // Propagate abort to the reader so the in-flight read() rejects promptly.
+  const onAbort = () => { reader.cancel().catch(() => {}); };
+  if (signal) {
+    if (signal.aborted) {
+      await reader.cancel().catch(() => {});
+      throw new DOMException("Aborted", "AbortError");
     }
+    signal.addEventListener("abort", onAbort);
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const evt = JSON.parse(line.slice(6)) as ChatStreamEvent;
+          onEvent(evt);
+        } catch { /* skip */ }
+      }
+    }
+  } finally {
+    if (signal) signal.removeEventListener("abort", onAbort);
   }
 }
 

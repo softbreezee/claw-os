@@ -54,6 +54,36 @@ interface ChatSession {
   preview: string;
 }
 
+// Per-(agent, session) runtime that survives tab switches.
+// Without this, switching agents while one is streaming would carry the
+// `sending=true` lock to the new tab and silently swallow user messages.
+interface RuntimeState {
+  sending: boolean;
+  messages: ChatMessage[];
+  abort?: () => void;
+  // Streaming accumulators – kept here (not in component locals) so the
+  // background SSE handler can keep writing into the right tab even when
+  // the user is looking at a different one.
+  curGroupId: string;
+  curCalls: ToolCall[];
+  curContent: string;
+}
+
+function makeRuntime(initial: ChatMessage[] = []): RuntimeState {
+  return {
+    sending: false,
+    messages: initial,
+    abort: undefined,
+    curGroupId: "",
+    curCalls: [],
+    curContent: "",
+  };
+}
+
+function rtKey(agentId: string, sessionId: string): string {
+  return `${agentId}::${sessionId}`;
+}
+
 function generateSessionId() {
   return `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -111,13 +141,35 @@ export default function ChatPage() {
   const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [sessionId, setSessionId] = useState<string>(() => generateSessionId());
   const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // All per-(agent, session) runtime state lives in this map. The currently
+  // visible tab is just a selector view over it. This is the structural fix
+  // that allows multiple agents to stream concurrently without their states
+  // bleeding into each other.
+  const [runtimes, setRuntimes] = useState<Record<string, RuntimeState>>({});
   const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const abortRef = useRef<(() => void) | null>(null);
+
+  // Mutable mirror of `runtimes` so the SSE callback (long-lived closure)
+  // can read the latest state without stale-closure bugs and keep the
+  // streaming accumulators (curCalls / curContent) outside React state.
+  const runtimesRef = useRef<Record<string, RuntimeState>>({});
+  runtimesRef.current = runtimes;
+
+  const currentKey = rtKey(selectedAgent, sessionId);
+  const current = runtimes[currentKey] ?? makeRuntime();
+  const messages = current.messages;
+  const sending = current.sending;
+
+  // Helper: mutate the runtime for a specific key, then trigger a re-render
+  // by rebuilding the top-level object reference.
+  const updateRuntime = useCallback((key: string, updater: (r: RuntimeState) => RuntimeState) => {
+    setRuntimes((prev) => {
+      const cur = prev[key] ?? makeRuntime();
+      return { ...prev, [key]: updater(cur) };
+    });
+  }, []);
 
   useEffect(() => {
     getStatus()
@@ -141,15 +193,22 @@ export default function ChatPage() {
     loadSessions(selectedAgent);
   }, [selectedAgent, loadSessions]);
 
+  // Load history when (agent, session) changes – but only if there is no
+  // live runtime already (i.e. don't clobber an in-flight stream when the
+  // user navigates back to a tab that is still working).
   useEffect(() => {
     if (!selectedAgent || !sessionId) return;
+    const key = rtKey(selectedAgent, sessionId);
+    const existing = runtimesRef.current[key];
+    if (existing && (existing.sending || existing.messages.length > 0)) return;
+
     getChatHistory(selectedAgent, sessionId)
       .then((history) => {
-        if (!history || history.length === 0) { setMessages([]); return; }
-        setMessages(buildChatMessages(history));
+        const msgs = !history || history.length === 0 ? [] : buildChatMessages(history);
+        updateRuntime(key, (r) => ({ ...r, messages: msgs }));
       })
-      .catch(() => setMessages([]));
-  }, [selectedAgent, sessionId]);
+      .catch(() => updateRuntime(key, (r) => ({ ...r, messages: [] })));
+  }, [selectedAgent, sessionId, updateRuntime]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -165,87 +224,136 @@ export default function ChatPage() {
 
   const handleSend = useCallback(async (text?: string) => {
     const msg = (text ?? input).trim();
-    if (!msg || !selectedAgent || sending) return;
+    if (!msg || !selectedAgent) return;
+    // Per-tab guard: if THIS tab is already streaming, ignore. Other tabs
+    // are unaffected because each (agent, session) has its own runtime.
+    const key = rtKey(selectedAgent, sessionId);
+    if (runtimesRef.current[key]?.sending) return;
 
     setInput("");
+    const agentForReq = selectedAgent;
+    const sessionForReq = sessionId;
     const userMsgId = `u-${Date.now()}`;
-    setMessages((prev) => [...prev, { id: userMsgId, role: "user", content: msg, timestamp: Date.now() }]);
-    setSending(true);
+    const initialGroupId = `tg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
-    let aborted = false;
-    abortRef.current = () => { aborted = true; };
+    // Real cancellation: AbortController propagates all the way to the Go
+    // backend's r.Context(), which kills the LLM call AND any inflight tool
+    // subprocesses (exec.CommandContext already honours ctx).
+    const ctrl = new AbortController();
 
-    let curGroupId = `tg-${Date.now()}`;
-    let curCalls: ToolCall[] = [];
-    let curContent = "";
+    updateRuntime(key, (r) => ({
+      ...r,
+      sending: true,
+      abort: () => ctrl.abort(),
+      messages: [...r.messages, { id: userMsgId, role: "user", content: msg, timestamp: Date.now() }],
+      curGroupId: initialGroupId,
+      curCalls: [],
+      curContent: "",
+    }));
 
+    // Helper: mutate the streaming accumulators in-place via runtimesRef so
+    // the SSE callback doesn't suffer from stale closures across re-renders.
     const startNewGroup = () => {
-      curGroupId = `tg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      curCalls = [];
-      curContent = "";
+      const r = runtimesRef.current[key];
+      if (!r) return;
+      r.curGroupId = `tg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      r.curCalls = [];
+      r.curContent = "";
     };
-    startNewGroup();
 
     try {
-      await sendChatStream(selectedAgent, sessionId, msg, (evt: ChatStreamEvent) => {
-        if (aborted) return;
+      await sendChatStream(agentForReq, sessionForReq, msg, (evt: ChatStreamEvent) => {
+        const r = runtimesRef.current[key];
+        if (!r) return;
         switch (evt.type) {
           case "content": {
             const content = evt.data?.content || "";
-            if (curCalls.length > 0) startNewGroup();
-            curContent = content;
-            setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "agent", content, timestamp: Date.now() }]);
+            if (r.curCalls.length > 0) startNewGroup();
+            r.curContent = content;
+            updateRuntime(key, (cur) => ({
+              ...cur,
+              messages: [...cur.messages, { id: `a-${Date.now()}`, role: "agent", content, timestamp: Date.now() }],
+            }));
             break;
           }
           case "tool_call": {
-            curCalls.push({ id: evt.data?.id || "", name: evt.data?.name || "", arguments: evt.data?.arguments || "{}" });
-            const groupId = curGroupId;
-            const calls = [...curCalls];
-            const content = curContent;
-            setMessages((prev) => {
-              const last = prev[prev.length - 1];
+            r.curCalls.push({ id: evt.data?.id || "", name: evt.data?.name || "", arguments: evt.data?.arguments || "{}" });
+            const groupId = r.curGroupId;
+            const calls = [...r.curCalls];
+            const content = r.curContent;
+            updateRuntime(key, (cur) => {
+              const last = cur.messages[cur.messages.length - 1];
               if (content && last?.role === "agent" && last.content === content) {
-                return [...prev.slice(0, -1), { id: groupId, role: "tool-group" as const, content, timestamp: Date.now(), toolCalls: calls }];
+                return { ...cur, messages: [...cur.messages.slice(0, -1), { id: groupId, role: "tool-group" as const, content, timestamp: Date.now(), toolCalls: calls }] };
               }
-              const idx = prev.findIndex((m) => m.id === groupId);
-              if (idx >= 0) { const u = [...prev]; u[idx] = { ...u[idx], toolCalls: calls }; return u; }
-              return [...prev, { id: groupId, role: "tool-group" as const, content, timestamp: Date.now(), toolCalls: calls }];
+              const idx = cur.messages.findIndex((m) => m.id === groupId);
+              if (idx >= 0) {
+                const u = [...cur.messages]; u[idx] = { ...u[idx], toolCalls: calls };
+                return { ...cur, messages: u };
+              }
+              return { ...cur, messages: [...cur.messages, { id: groupId, role: "tool-group" as const, content, timestamp: Date.now(), toolCalls: calls }] };
             });
             break;
           }
           case "tool_result": {
-            const tc = curCalls.find((c) => c.id === (evt.data?.id || ""));
+            const tc = r.curCalls.find((c) => c.id === (evt.data?.id || ""));
             if (tc) tc.result = evt.data?.result || "";
-            const groupId = curGroupId;
-            const calls = [...curCalls];
-            setMessages((prev) => {
-              const idx = prev.findIndex((m) => m.id === groupId);
-              if (idx < 0) return prev;
-              const u = [...prev]; u[idx] = { ...u[idx], toolCalls: calls }; return u;
+            const groupId = r.curGroupId;
+            const calls = [...r.curCalls];
+            updateRuntime(key, (cur) => {
+              const idx = cur.messages.findIndex((m) => m.id === groupId);
+              if (idx < 0) return cur;
+              const u = [...cur.messages]; u[idx] = { ...u[idx], toolCalls: calls };
+              return { ...cur, messages: u };
             });
             break;
           }
         }
-      });
-      loadSessions(selectedAgent);
-    } catch {
+      }, ctrl.signal);
+      loadSessions(agentForReq);
+    } catch (err) {
+      const aborted = (err as Error)?.name === "AbortError" || ctrl.signal.aborted;
       if (!aborted) {
-        setMessages((prev) => [
-          ...prev,
-          { id: `e-${Date.now()}`, role: "agent", content: "⚠️ Failed to get a response. Is the gateway running?", timestamp: Date.now() },
-        ]);
+        updateRuntime(key, (cur) => ({
+          ...cur,
+          messages: [
+            ...cur.messages,
+            { id: `e-${Date.now()}`, role: "agent", content: "⚠️ Failed to get a response. Is the gateway running?", timestamp: Date.now() },
+          ],
+        }));
       }
     } finally {
-      setSending(false);
-      abortRef.current = null;
-      textareaRef.current?.focus();
+      // Mark any tool calls that never got a result as cancelled so the UI
+      // stops spinning (fixes the "Running tools..." stuck state).
+      updateRuntime(key, (cur) => ({
+        ...cur,
+        sending: false,
+        abort: undefined,
+        messages: cur.messages.map((m) => {
+          if (m.role !== "tool-group" || !m.toolCalls) return m;
+          const hasUnfinished = m.toolCalls.some((tc) => tc.result == null);
+          if (!hasUnfinished) return m;
+          return {
+            ...m,
+            toolCalls: m.toolCalls.map((tc) =>
+              tc.result == null ? { ...tc, result: "[cancelled]", error: true } : tc
+            ),
+          };
+        }),
+      }));
+      // Only refocus the input if the user is still looking at this tab.
+      if (rtKey(selectedAgent, sessionId) === key) {
+        textareaRef.current?.focus();
+      }
     }
-  }, [input, selectedAgent, sessionId, sending, loadSessions]);
+  }, [input, selectedAgent, sessionId, loadSessions, updateRuntime]);
 
-  const handleStop = () => {
-    abortRef.current?.();
-    setSending(false);
-  };
+  const handleStop = useCallback(() => {
+    const r = runtimesRef.current[currentKey];
+    r?.abort?.();
+    // sending will be flipped to false in handleSend's finally; abort will
+    // make the fetch reject with AbortError and trigger that path.
+  }, [currentKey]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
@@ -258,8 +366,11 @@ export default function ChatPage() {
   };
 
   const handleNewChat = useCallback(() => {
+    // Switching to a fresh session – the new (agent, session) tuple gets
+    // its own runtime entry on first access, so we don't need to clear
+    // anything here. The OLD tab's runtime (and any in-flight stream) is
+    // preserved so background tasks keep running.
     setSessionId(generateSessionId());
-    setMessages([]);
   }, []);
 
   const handleDeleteSession = async (sid: string, e: React.MouseEvent) => {
@@ -268,6 +379,15 @@ export default function ChatPage() {
     try {
       await deleteChatSession(selectedAgent, sid);
       loadSessions(selectedAgent);
+      // Drop the runtime for the deleted session, aborting any in-flight stream.
+      const dropKey = rtKey(selectedAgent, sid);
+      const dropped = runtimesRef.current[dropKey];
+      dropped?.abort?.();
+      setRuntimes((prev) => {
+        const next = { ...prev };
+        delete next[dropKey];
+        return next;
+      });
       if (sessionId === sid) handleNewChat();
     } catch { /* ignore */ }
   };
