@@ -88,12 +88,16 @@ export default function SkillsPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium">{skill.name}</p>
-                    <Badge
-                      variant="outline"
-                      className="mt-1 text-[10px]"
-                    >
-                      {skill.type || "skill"}
-                    </Badge>
+                    <div className="flex items-center gap-1 mt-1 flex-wrap">
+                      <Badge variant="outline" className="text-[10px]">
+                        {skill.type || "skill"}
+                      </Badge>
+                      {skill.owner && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          {skill.owner}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <Button

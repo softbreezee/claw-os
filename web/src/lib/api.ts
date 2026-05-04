@@ -48,6 +48,8 @@ export interface SkillInfo {
   description: string;
   location: string;
   type: string;
+  // Set when the skill lives in an agent workspace; absent for shared skills.
+  owner?: string;
 }
 
 export interface PluginInfo {
