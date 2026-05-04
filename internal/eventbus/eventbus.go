@@ -29,7 +29,15 @@ import (
 )
 
 // Event is a single message broadcast on a topic.
+//
+// Seq is a monotonically-increasing per-topic sequence number assigned
+// by the producer (see TaskRunner). It enables resumable subscribers –
+// a reconnecting client passes its last-seen Seq via ?after=N and the
+// handler replays buffered events with greater Seq before subscribing
+// to live updates. Seq is 0 for legacy producers that don't number their
+// events; consumers should treat 0 as "no resume info".
 type Event struct {
+	Seq       int64          `json:"seq,omitempty"`
 	Type      string         `json:"type"`
 	Data      map[string]any `json:"data,omitempty"`
 	Timestamp time.Time      `json:"timestamp"`

@@ -202,8 +202,22 @@ export async function sendChat(agentId: string, sessionId: string, message: stri
 }
 
 export interface ChatStreamEvent {
-  type: "content" | "tool_call" | "tool_result" | "done";
+  // Task lifecycle types are emitted only by the new submit/subscribe API
+  // (PR2). The legacy /api/chat/stream only emits content/tool_call/tool_result/done.
+  type:
+    | "content"
+    | "tool_call"
+    | "tool_result"
+    | "done"
+    | "task_pending"
+    | "task_running"
+    | "task_done"
+    | "task_error"
+    | "task_cancelled";
   data?: Record<string, string>;
+  // PR3: monotonic per-task sequence used for resumable subscriptions.
+  // Absent on legacy /api/chat/stream events.
+  seq?: number;
 }
 
 export async function sendChatStream(
@@ -298,12 +312,21 @@ export async function submitChat(
 // the bus closes the topic (terminal event received) or the abort signal
 // fires. Safe to call repeatedly for the same taskId – each call gets
 // its own subscription.
+//
+// PR3: pass `afterSeq` to resume from a known position. The backend
+// replays buffered events with seq > afterSeq before subscribing to live
+// updates, so a reconnecting client never misses events (as long as the
+// gap is within the server-side ring buffer of ~256 events per task).
 export async function subscribeTaskEvents(
   taskId: string,
   onEvent: (evt: ChatStreamEvent) => void,
   signal?: AbortSignal,
+  afterSeq?: number,
 ): Promise<void> {
-  const res = await fetch(`/api/chat/tasks/${encodeURIComponent(taskId)}/events`, { signal });
+  const url = afterSeq && afterSeq > 0
+    ? `/api/chat/tasks/${encodeURIComponent(taskId)}/events?after=${afterSeq}`
+    : `/api/chat/tasks/${encodeURIComponent(taskId)}/events`;
+  const res = await fetch(url, { signal });
   if (!res.ok || !res.body) {
     throw new Error(`subscribe failed: ${res.status}`);
   }

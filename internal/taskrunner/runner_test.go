@@ -340,6 +340,58 @@ func TestRunner_PerSessionSerial(t *testing.T) {
 	}
 }
 
+// PR3: events get monotonic seq numbers and the runner buffers recent
+// events so reconnecting clients can resume.
+func TestRunner_EventsAfterAndSeqMonotonic(t *testing.T) {
+	st := newMemStore()
+	bus := eventbus.NewMemoryBus()
+	defer bus.Close()
+	ag := &fakeAgent{
+		behaviour: func(ctx context.Context, sid, text string, events chan<- agent.ChatEvent) string {
+			events <- agent.ChatEvent{Type: "content", Data: map[string]any{"content": "a"}}
+			events <- agent.ChatEvent{Type: "content", Data: map[string]any{"content": "ab"}}
+			events <- agent.ChatEvent{Type: "content", Data: map[string]any{"content": "abc"}}
+			return "abc"
+		},
+	}
+	r := New(st, bus, &fakeResolver{ag: ag}, Options{Timeout: 2 * time.Second})
+	defer r.Stop()
+
+	taskID, _ := r.Submit(context.Background(), "agent-1", "sess-1", "go")
+
+	// Wait for completion via subscription.
+	ch, cancel := bus.Subscribe(TopicFor(taskID))
+	defer cancel()
+	collectEvents(ch, 2*time.Second)
+
+	// All buffered events must have monotonically increasing seq starting at 1.
+	all := r.EventsAfter(taskID, 0)
+	if len(all) < 4 { // pending + running + 3 content + done = 6, but buffer order varies
+		t.Fatalf("expected at least 4 buffered events, got %d", len(all))
+	}
+	var prev int64
+	for i, e := range all {
+		if e.Seq <= prev {
+			t.Fatalf("event %d: seq=%d not > prev=%d", i, e.Seq, prev)
+		}
+		prev = e.Seq
+	}
+
+	// EventsAfter(N) should drop events with seq <= N.
+	mid := all[len(all)/2].Seq
+	tail := r.EventsAfter(taskID, mid)
+	for _, e := range tail {
+		if e.Seq <= mid {
+			t.Fatalf("EventsAfter(%d) returned event with seq=%d", mid, e.Seq)
+		}
+	}
+
+	// EventsAfter for unknown task returns nil (not an error).
+	if r.EventsAfter("nonexistent", 0) != nil {
+		t.Fatal("EventsAfter unknown task should be nil")
+	}
+}
+
 // terminalSnapshotForResume: the bus emits task_done; a late subscriber
 // should not get it (already drained). The handler-level snapshot logic
 // is what saves us in production – we test that GetChatTask reflects the

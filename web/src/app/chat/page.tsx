@@ -68,6 +68,10 @@ interface RuntimeState {
   // submitChat resolves; cleared on terminal events. Also used to
   // re-subscribe after a tab switch (see useEffect below).
   taskId?: string;
+  // PR3: highest seq we've successfully processed for the current task.
+  // Sent as ?after= when re-subscribing so we don't replay events the
+  // UI has already absorbed.
+  lastSeq?: number;
   // Streaming accumulators – kept here (not in component locals) so the
   // background SSE handler can keep writing into the right tab even when
   // the user is looking at a different one.
@@ -89,6 +93,40 @@ function makeRuntime(initial: ChatMessage[] = []): RuntimeState {
 
 function rtKey(agentId: string, sessionId: string): string {
   return `${agentId}::${sessionId}`;
+}
+
+// PR3: persist the (agent, session) → taskId map across page reloads so a
+// background task survives a refresh / browser restart. We deliberately
+// only persist the taskId; the messages array is reloaded from server
+// history on next mount, and the resume useEffect re-subscribes via the
+// taskId. This keeps localStorage tiny (one entry, ~50 bytes per task).
+const TASK_STORAGE_KEY = "fastclaw.chat.tasks.v1";
+
+function loadPersistedTaskIds(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(TASK_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistTaskId(key: string, taskId: string | undefined) {
+  if (typeof window === "undefined") return;
+  try {
+    const cur = loadPersistedTaskIds();
+    if (taskId) {
+      cur[key] = taskId;
+    } else {
+      delete cur[key];
+    }
+    window.localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(cur));
+  } catch {
+    // Storage quota / private mode – best-effort, drop silently.
+  }
 }
 
 function generateSessionId() {
@@ -152,7 +190,18 @@ export default function ChatPage() {
   // visible tab is just a selector view over it. This is the structural fix
   // that allows multiple agents to stream concurrently without their states
   // bleeding into each other.
-  const [runtimes, setRuntimes] = useState<Record<string, RuntimeState>>({});
+  //
+  // On first mount we hydrate from localStorage so a background task that
+  // was started in a previous session can be re-attached. Only the taskId
+  // is persisted; messages are loaded from server history.
+  const [runtimes, setRuntimes] = useState<Record<string, RuntimeState>>(() => {
+    const persisted = loadPersistedTaskIds();
+    const init: Record<string, RuntimeState> = {};
+    for (const [k, taskId] of Object.entries(persisted)) {
+      init[k] = { ...makeRuntime(), taskId };
+    }
+    return init;
+  });
   const [input, setInput] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -170,11 +219,16 @@ export default function ChatPage() {
   const sending = current.sending;
 
   // Helper: mutate the runtime for a specific key, then trigger a re-render
-  // by rebuilding the top-level object reference.
+  // by rebuilding the top-level object reference. Also syncs the taskId to
+  // localStorage when it changes so background tasks survive page reloads.
   const updateRuntime = useCallback((key: string, updater: (r: RuntimeState) => RuntimeState) => {
     setRuntimes((prev) => {
       const cur = prev[key] ?? makeRuntime();
-      return { ...prev, [key]: updater(cur) };
+      const next = updater(cur);
+      if (cur.taskId !== next.taskId) {
+        persistTaskId(key, next.taskId);
+      }
+      return { ...prev, [key]: next };
     });
   }, []);
 
@@ -234,7 +288,7 @@ export default function ChatPage() {
   // user navigated away from while a task was running). Encapsulates all
   // the SSE event → runtime mutation logic so both call sites stay sane.
   const streamTaskEvents = useCallback(
-    async (key: string, taskId: string, ctrl: AbortController) => {
+    async (key: string, taskId: string, ctrl: AbortController, afterSeq?: number) => {
       const startNewGroup = () => {
         const r = runtimesRef.current[key];
         if (!r) return;
@@ -247,6 +301,11 @@ export default function ChatPage() {
         await subscribeTaskEvents(taskId, (evt: ChatStreamEvent) => {
           const r = runtimesRef.current[key];
           if (!r) return;
+          // PR3: track the highest seq we've absorbed; written back to
+          // runtime so a future reconnect can resume from this point.
+          if (evt.seq != null && (!r.lastSeq || evt.seq > r.lastSeq)) {
+            r.lastSeq = evt.seq;
+          }
           switch (evt.type) {
             case "content": {
               const content = evt.data?.content || "";
@@ -294,15 +353,17 @@ export default function ChatPage() {
             // the finally block below via runtime cleanup. We don't
             // need to surface them as messages.
           }
-        }, ctrl.signal);
+        }, ctrl.signal, afterSeq);
       } finally {
         // Cleanup runtime: clear sending flag, drop abort func, mark
         // any never-completed tool calls as cancelled so spinners stop.
+        // Also clear lastSeq – the task is terminal, no resume possible.
         updateRuntime(key, (cur) => ({
           ...cur,
           sending: false,
           abort: undefined,
           taskId: undefined,
+          lastSeq: undefined,
           messages: cur.messages.map((m) => {
             if (m.role !== "tool-group" || !m.toolCalls) return m;
             const hasUnfinished = m.toolCalls.some((tc) => tc.result == null);
@@ -398,7 +459,13 @@ export default function ChatPage() {
     const key = rtKey(selectedAgent, sessionId);
     const r = runtimesRef.current[key];
     if (!r?.taskId || r.sending) return;
+    // We have a known taskId for this tab but no active subscription.
+    // Either it finished while we were away, or the previous SSE stream
+    // dropped. Either way, getTask + (maybe) re-subscribe will catch us up.
     let cancelled = false;
+    // Resume from the highest seq we already absorbed so we don't replay
+    // events the UI has already rendered.
+    const resumeFromSeq = r.lastSeq;
     (async () => {
       try {
         const t = await getTask(r.taskId!);
@@ -406,14 +473,14 @@ export default function ChatPage() {
         if (t.status === "running" || t.status === "pending") {
           const ctrl = new AbortController();
           updateRuntime(key, (cur) => ({ ...cur, sending: true, abort: () => ctrl.abort() }));
-          await streamTaskEvents(key, t.id, ctrl);
+          await streamTaskEvents(key, t.id, ctrl, resumeFromSeq);
         } else {
           // Already terminal – just clear residual state.
-          updateRuntime(key, (cur) => ({ ...cur, taskId: undefined, sending: false }));
+          updateRuntime(key, (cur) => ({ ...cur, taskId: undefined, sending: false, lastSeq: undefined }));
         }
       } catch {
         // Task disappeared (e.g. server restart). Drop the dangling ref.
-        updateRuntime(key, (cur) => ({ ...cur, taskId: undefined, sending: false }));
+        updateRuntime(key, (cur) => ({ ...cur, taskId: undefined, sending: false, lastSeq: undefined }));
       }
     })();
     return () => { cancelled = true; };

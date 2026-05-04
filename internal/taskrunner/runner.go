@@ -64,8 +64,23 @@ type Runner struct {
 	inflight map[string]*runningTask  // taskID -> currently executing task
 	seq      uint64
 
+	// PR3: per-task ring buffer of recent events, keyed by taskID. Used
+	// by handlers to replay events to clients that missed them (e.g.
+	// after a network blip). historySize caps memory per task.
+	historyMu   sync.RWMutex
+	history     map[string]*eventHistory
+	historySize int
+
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
+}
+
+// eventHistory is a bounded ring buffer of recent events for one task.
+// We could use a slice + pruning but a ring is O(1) append and easier
+// to reason about under concurrent access.
+type eventHistory struct {
+	events  []eventbus.Event // oldest at index 0 after wrap
+	nextSeq int64            // next seq to assign (1-based, never reused)
 }
 
 // runningTask holds the cancel func of a task currently being executed,
@@ -95,16 +110,73 @@ func New(s store.Store, bus eventbus.Bus, resolver AgentResolver, opts Options) 
 	}
 	rootCtx, cancel := context.WithCancel(context.Background())
 	return &Runner{
-		store:      s,
-		bus:        bus,
-		resolver:   resolver,
-		tenantID:   opts.TenantID,
-		timeout:    opts.Timeout,
-		queues:     make(map[string]*sessionQueue),
-		inflight:   make(map[string]*runningTask),
-		rootCtx:    rootCtx,
-		rootCancel: cancel,
+		store:       s,
+		bus:         bus,
+		resolver:    resolver,
+		tenantID:    opts.TenantID,
+		timeout:     opts.Timeout,
+		queues:      make(map[string]*sessionQueue),
+		inflight:    make(map[string]*runningTask),
+		history:     make(map[string]*eventHistory),
+		historySize: 256, // ~256 events covers a full agent turn comfortably
+		rootCtx:     rootCtx,
+		rootCancel:  cancel,
 	}
+}
+
+// publishEvent assigns a monotonic per-task sequence, appends to the
+// history ring, then broadcasts on the bus. ALL task event publishes
+// must go through this function (do not call r.bus.Publish directly)
+// so that resumable subscribers can replay reliably.
+func (r *Runner) publishEvent(ctx context.Context, taskID string, evt eventbus.Event) {
+	r.historyMu.Lock()
+	h, ok := r.history[taskID]
+	if !ok {
+		h = &eventHistory{nextSeq: 1}
+		r.history[taskID] = h
+	}
+	evt.Seq = h.nextSeq
+	h.nextSeq++
+	if len(h.events) >= r.historySize {
+		// Drop the oldest event. This means very-late subscribers may
+		// miss the start of the task, but they get a snapshot from the
+		// store (terminal-state replay in the handler) so we never lose
+		// "what happened" – only intermediate streaming chunks.
+		h.events = append(h.events[1:], evt)
+	} else {
+		h.events = append(h.events, evt)
+	}
+	r.historyMu.Unlock()
+
+	r.bus.Publish(ctx, TopicFor(taskID), evt)
+}
+
+// EventsAfter returns buffered events for a task with Seq strictly
+// greater than after. Returns nil if no buffered events match (caller
+// should still subscribe for live updates).
+func (r *Runner) EventsAfter(taskID string, after int64) []eventbus.Event {
+	r.historyMu.RLock()
+	defer r.historyMu.RUnlock()
+	h, ok := r.history[taskID]
+	if !ok {
+		return nil
+	}
+	out := make([]eventbus.Event, 0, len(h.events))
+	for _, e := range h.events {
+		if e.Seq > after {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// dropHistory releases the per-task event buffer. Called automatically
+// after task completion + a grace period; can also be called explicitly
+// when the chat task record is deleted.
+func (r *Runner) dropHistory(taskID string) {
+	r.historyMu.Lock()
+	delete(r.history, taskID)
+	r.historyMu.Unlock()
 }
 
 // Stop signals all per-session worker goroutines to exit and cancels
@@ -152,7 +224,7 @@ func (r *Runner) Submit(ctx context.Context, agentID, sessionID, message string)
 
 	// Pending event for any subscriber that's already listening (rare but
 	// possible when callers Subscribe immediately after Submit).
-	r.bus.Publish(ctx, TopicFor(taskID), eventbus.Event{
+	r.publishEvent(ctx, taskID, eventbus.Event{
 		Type:      "task_pending",
 		Data:      map[string]any{"taskId": taskID},
 		Timestamp: now,
@@ -193,7 +265,7 @@ func (r *Runner) Cancel(ctx context.Context, taskID string) error {
 		rt.cancel()
 	}
 
-	r.bus.Publish(ctx, TopicFor(taskID), eventbus.Event{
+	r.publishEvent(ctx, taskID, eventbus.Event{
 		Type:      "task_cancelled",
 		Data:      map[string]any{"taskId": taskID},
 		Timestamp: now,
@@ -248,7 +320,7 @@ func (r *Runner) run(rec *store.ChatTaskRecord) {
 	if uerr := r.store.UpdateChatTask(taskCtx, r.tenantID, rec); uerr != nil {
 		slog.Warn("taskrunner: mark running failed", "task", rec.ID, "err", uerr)
 	}
-	r.bus.Publish(taskCtx, TopicFor(rec.ID), eventbus.Event{
+	r.publishEvent(taskCtx, rec.ID, eventbus.Event{
 		Type:      "task_running",
 		Data:      map[string]any{"taskId": rec.ID},
 		Timestamp: startedAt,
@@ -279,7 +351,7 @@ func (r *Runner) run(rec *store.ChatTaskRecord) {
 	}()
 
 	for evt := range events {
-		r.bus.Publish(taskCtx, TopicFor(rec.ID), eventbus.Event{
+		r.publishEvent(taskCtx, rec.ID, eventbus.Event{
 			Type:      evt.Type,
 			Data:      evt.Data,
 			Timestamp: time.Now().UTC(),
@@ -317,7 +389,7 @@ func (r *Runner) finishOK(rec *store.ChatTaskRecord, result string) {
 	if uerr := r.store.UpdateChatTask(r.rootCtx, r.tenantID, rec); uerr != nil {
 		slog.Warn("taskrunner: persist done failed", "task", rec.ID, "err", uerr)
 	}
-	r.bus.Publish(r.rootCtx, TopicFor(rec.ID), eventbus.Event{
+	r.publishEvent(r.rootCtx, rec.ID, eventbus.Event{
 		Type:      "task_done",
 		Data:      map[string]any{"taskId": rec.ID, "result": result},
 		Timestamp: now,
@@ -332,7 +404,7 @@ func (r *Runner) finishWithError(rec *store.ChatTaskRecord, err error) {
 	if uerr := r.store.UpdateChatTask(r.rootCtx, r.tenantID, rec); uerr != nil {
 		slog.Warn("taskrunner: persist failed-state failed", "task", rec.ID, "err", uerr)
 	}
-	r.bus.Publish(r.rootCtx, TopicFor(rec.ID), eventbus.Event{
+	r.publishEvent(r.rootCtx, rec.ID, eventbus.Event{
 		Type:      "task_error",
 		Data:      map[string]any{"taskId": rec.ID, "error": err.Error()},
 		Timestamp: now,

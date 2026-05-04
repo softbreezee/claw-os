@@ -59,11 +59,14 @@ func (s *Server) handleChatSubmit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/chat/tasks/{id}/events – SSE subscription to a task's event
-// stream. The connection stays open until either:
+// GET /api/chat/tasks/{id}/events?after=N – SSE subscription to a task's
+// event stream. The connection stays open until either:
 //   * the client disconnects (handled by ctx cancel),
 //   * a terminal event (task_done / task_error / task_cancelled) is received, or
 //   * the EventBus closes the topic (process shutdown).
+//
+// PR3: ?after=N replays buffered events with seq > N before subscribing
+// to live updates, enabling resumable streams across reconnects.
 func (s *Server) handleChatTaskEvents(w http.ResponseWriter, r *http.Request) {
 	if !s.chatTaskWired() {
 		http.Error(w, "chat task subsystem not initialised", http.StatusServiceUnavailable)
@@ -92,15 +95,40 @@ func (s *Server) handleChatTaskEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	// Subscribe BEFORE we check the persisted terminal state, so we
-	// don't race a terminal event published right after the GET.
-	ch, cancel := s.eventBus.Subscribe(taskrunner.TopicFor(taskID))
-	defer cancel()
+	// Parse resume cursor. Invalid/missing → 0 (replay everything in buffer).
+	var afterSeq int64
+	if v := r.URL.Query().Get("after"); v != "" {
+		if n, perr := strconv.ParseInt(v, 10, 64); perr == nil && n >= 0 {
+			afterSeq = n
+		}
+	}
 
-	// If the task is already terminal (e.g. user reconnects after task
-	// finished), emit a synthetic snapshot and close. Avoids a long-lived
-	// idle SSE connection that yields no further events.
-	if isTerminalChatTaskStatus(rec.Status) {
+	// CRITICAL ORDERING (avoid both gaps and duplicates):
+	//   1. Subscribe to live first (locks in our position in the bus).
+	//   2. Snapshot the buffered history.
+	//   3. Replay buffered events with seq > afterSeq.
+	//   4. Drain live events, but skip any whose seq <= the highest
+	//      seq we replayed (because the bus may emit events that were
+	//      already in the snapshot).
+	ch, cancelSub := s.eventBus.Subscribe(taskrunner.TopicFor(taskID))
+	defer cancelSub()
+
+	buffered := s.chatRunner.EventsAfter(taskID, afterSeq)
+	var maxReplayedSeq int64 = afterSeq
+	for _, evt := range buffered {
+		writeSSEEvent(w, flusher, evt)
+		if evt.Seq > maxReplayedSeq {
+			maxReplayedSeq = evt.Seq
+		}
+		if isTerminalEventType(evt.Type) {
+			return
+		}
+	}
+
+	// If the persisted record is already terminal AND we've replayed
+	// everything in the buffer, no live events will arrive – close out
+	// with a snapshot if the buffer didn't include the terminal event.
+	if isTerminalChatTaskStatus(rec.Status) && len(buffered) == 0 {
 		writeSSEEvent(w, flusher, snapshotEvent(rec))
 		return
 	}
@@ -112,6 +140,12 @@ func (s *Server) handleChatTaskEvents(w http.ResponseWriter, r *http.Request) {
 		case evt, ok := <-ch:
 			if !ok {
 				return
+			}
+			// De-dup: bus may deliver an event that we already replayed
+			// from history. Compare by seq (assigned monotonically by
+			// publishEvent).
+			if evt.Seq != 0 && evt.Seq <= maxReplayedSeq {
+				continue
 			}
 			writeSSEEvent(w, flusher, evt)
 			if isTerminalEventType(evt.Type) {
