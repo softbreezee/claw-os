@@ -62,6 +62,42 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// MigrateChatTasks creates only the chat_tasks table + its indexes.
+// Used by callers that need the chat task subsystem (PR2) but cannot
+// run the full Migrate() because legacy table definitions still have
+// dialect-specific quirks (e.g. memory_logs uses AUTOINCREMENT which
+// is SQLite-only). Idempotent; safe to call on every startup.
+func (d *DBStore) MigrateChatTasks(ctx context.Context) error {
+	for _, stmt := range d.chatTasksMigrationSQL() {
+		if _, err := d.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrate chat_tasks: %w\nSQL: %s", err, stmt)
+		}
+	}
+	return nil
+}
+
+func (d *DBStore) chatTasksMigrationSQL() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS chat_tasks (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			session_key TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			message TEXT NOT NULL,
+			result TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			started_at TIMESTAMP,
+			done_at TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_tasks_agent ON chat_tasks (tenant_id, agent_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_tasks_status ON chat_tasks (status, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_tasks_session ON chat_tasks (tenant_id, agent_id, session_key, created_at DESC)`,
+	}
+}
+
 func (d *DBStore) migrationSQL() []string {
 	// Use TEXT for JSON columns (works in both postgres and sqlite).
 	// Postgres users can alter to JSONB later for indexing.

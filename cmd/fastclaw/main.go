@@ -12,6 +12,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	// Register the pgx stdlib driver so store.NewDBStore can open
+	// postgres connections via database/sql. The gateway's own pg pool
+	// uses pgxpool directly and doesn't need this, but the chat task
+	// store goes through database/sql and would otherwise fail with
+	// `sql: unknown driver "pgx"`.
+	_ "github.com/jackc/pgx/v5/stdlib"
+
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
 	"github.com/fastclaw-ai/fastclaw/internal/api"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
@@ -114,20 +121,34 @@ func runGateway(port int) error {
 	// the file backend this is essentially zero-cost; for SQLite/Postgres
 	// it opens a second connection pool, which is fine.
 	homeDir, _ := config.HomeDir()
+	// Open the store WITHOUT full AutoMigrate – the legacy migration
+	// set has dialect-specific issues (e.g. memory_logs AUTOINCREMENT
+	// only works on SQLite). For the chat_tasks table we need, we run
+	// a targeted migration below.
 	chatTaskStore, storeErr := store.New(&store.StorageConfig{
-		Type:        store.StorageType(cfg.Storage.Type),
-		DSN:         cfg.Storage.DSN,
-		AutoMigrate: cfg.Storage.AutoMigrate,
+		Type: store.StorageType(cfg.Storage.Type),
+		DSN:  cfg.Storage.DSN,
 	}, homeDir)
 	if storeErr != nil {
 		slog.Warn("chat task store init failed; async chat tasks disabled", "err", storeErr)
 	} else {
-		evtBus := eventbus.NewMemoryBus()
-		runner := taskrunner.New(chatTaskStore, evtBus,
-			&chatTaskAgentResolver{mgr: gw.AgentManager()},
-			taskrunner.Options{TenantID: store.DefaultTenantID})
-		webSrv.SetChatTaskRunner(runner, evtBus, chatTaskStore, store.DefaultTenantID)
-		slog.Info("chat task subsystem ready")
+		// Run only chat_tasks DDL if we're on a database backend.
+		// The file backend doesn't need any schema setup.
+		if dbs, ok := chatTaskStore.(*store.DBStore); ok {
+			if mErr := dbs.MigrateChatTasks(context.Background()); mErr != nil {
+				slog.Warn("chat_tasks migration failed; async chat tasks disabled", "err", mErr)
+				chatTaskStore.Close()
+				chatTaskStore = nil
+			}
+		}
+		if chatTaskStore != nil {
+			evtBus := eventbus.NewMemoryBus()
+			runner := taskrunner.New(chatTaskStore, evtBus,
+				&chatTaskAgentResolver{mgr: gw.AgentManager()},
+				taskrunner.Options{TenantID: store.DefaultTenantID})
+			webSrv.SetChatTaskRunner(runner, evtBus, chatTaskStore, store.DefaultTenantID)
+			slog.Info("chat task subsystem ready")
+		}
 	}
 
 	// Set up OpenAI-compatible API and WebSocket gateway
