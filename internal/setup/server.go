@@ -131,6 +131,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// Skills
 	mux.HandleFunc("GET /api/skills", s.handleListSkills)
 	mux.HandleFunc("DELETE /api/skills/{name}", s.handleDeleteSkill)
+	mux.HandleFunc("POST /api/skills/{name}/move", s.handleMoveSkill)
 
 	// Plugins
 	mux.HandleFunc("GET /api/plugins", s.handleListPlugins)

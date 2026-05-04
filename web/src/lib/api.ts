@@ -47,7 +47,8 @@ export interface SkillInfo {
   name: string;
   description: string;
   location: string;
-  type: string;
+  type: string;     // "builtin" | "user" | "agent"
+  builtin?: boolean; // true when shipped with the binary
   // Set when the skill lives in an agent workspace; absent for shared skills.
   owner?: string;
 }
@@ -400,6 +401,20 @@ export async function getSkills(): Promise<SkillInfo[]> {
 export async function deleteSkill(name: string) {
   const res = await fetch(`/api/skills/${name}`, {
     method: "DELETE",
+  });
+  return res.json();
+}
+
+// Move a skill between writable layers.
+//   scope: "user"        – ~/.fastclaw/skills/ (shared)
+//   scope: "agent:<id>"  – ~/.fastclaw/agents/<id>/agent/skills/
+// Builtin skills cannot be moved (immutable; create a same-named override
+// in user/ or an agent workspace to take precedence at runtime).
+export async function moveSkill(name: string, scope: string): Promise<{ ok: boolean; location?: string; error?: string }> {
+  const res = await fetch(`/api/skills/${encodeURIComponent(name)}/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope }),
   });
   return res.json();
 }
