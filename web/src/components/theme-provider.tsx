@@ -28,9 +28,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
+    // Add transition class for smooth color change
+    document.documentElement.classList.add("theme-transition");
     setTheme(next);
     localStorage.setItem("fastclaw-theme", next);
     document.documentElement.classList.toggle("dark", next === "dark");
+    // Remove transition class after animation completes
+    setTimeout(() => {
+      document.documentElement.classList.remove("theme-transition");
+    }, 300);
   };
 
   return (
