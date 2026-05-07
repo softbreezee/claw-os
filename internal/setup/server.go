@@ -13,7 +13,10 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
 	"github.com/fastclaw-ai/fastclaw/internal/api"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/fastclaw-ai/fastclaw/internal/eventbus"
+	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/taskqueue"
+	"github.com/fastclaw-ai/fastclaw/internal/taskrunner"
 )
 
 // AgentHandle is a minimal interface for interacting with an agent from the web UI.
@@ -42,6 +45,14 @@ type Server struct {
 	taskQueue     *taskqueue.Queue
 	apiServer     *api.Server
 	startedAt     time.Time
+
+	// Web chat async task plumbing (PR2). All three may be nil if the
+	// runtime isn't fully wired (e.g. setup wizard mode); handlers must
+	// guard with HTTP 503.
+	chatRunner *taskrunner.Runner
+	eventBus   eventbus.Bus
+	taskStore  store.Store
+	tenantID   string
 }
 
 // NewServer creates a setup wizard server on the given port.
@@ -70,6 +81,18 @@ func (s *Server) SetTaskQueue(tq *taskqueue.Queue) {
 	s.taskQueue = tq
 }
 
+// SetChatTaskRunner wires in the async web chat task subsystem.
+// All three components are required together; pass nil to disable.
+func (s *Server) SetChatTaskRunner(r *taskrunner.Runner, bus eventbus.Bus, st store.Store, tenantID string) {
+	s.chatRunner = r
+	s.eventBus = bus
+	s.taskStore = st
+	if tenantID == "" {
+		tenantID = store.DefaultTenantID
+	}
+	s.tenantID = tenantID
+}
+
 // SetAPIServer sets the OpenAI-compatible API server for /v1/* and /ws routes.
 func (s *Server) SetAPIServer(apiSrv *api.Server) {
 	s.apiServer = apiSrv
@@ -87,7 +110,11 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/test-provider", s.handleTestProvider)
 	mux.HandleFunc("POST /api/save-config", s.handleSaveConfig)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
-	mux.HandleFunc("POST /api/chat/stream", s.handleChatStream)
+	mux.HandleFunc("POST /api/chat/submit", s.handleChatSubmit)
+	mux.HandleFunc("GET /api/chat/tasks", s.handleListChatTasks)
+	mux.HandleFunc("GET /api/chat/tasks/{id}", s.handleGetChatTask)
+	mux.HandleFunc("GET /api/chat/tasks/{id}/events", s.handleChatTaskEvents)
+	mux.HandleFunc("POST /api/chat/tasks/{id}/cancel", s.handleChatTaskCancel)
 	mux.HandleFunc("GET /api/chat/history", s.handleChatHistory)
 	mux.HandleFunc("GET /api/chat/sessions", s.handleChatSessions)
 	mux.HandleFunc("DELETE /api/chat/sessions", s.handleDeleteChatSession)
@@ -104,6 +131,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// Skills
 	mux.HandleFunc("GET /api/skills", s.handleListSkills)
 	mux.HandleFunc("DELETE /api/skills/{name}", s.handleDeleteSkill)
+	mux.HandleFunc("POST /api/skills/{name}/move", s.handleMoveSkill)
 
 	// Plugins
 	mux.HandleFunc("GET /api/plugins", s.handleListPlugins)
@@ -175,6 +203,15 @@ type spaHandler struct {
 
 func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
+
+	// Critical: do NOT serve the SPA for /api/* requests. If we did, an
+	// unknown API path would silently return 200 + index.html, masking
+	// 404s and breaking client error handling (a stale frontend hitting
+	// a deleted endpoint would never realise it failed).
+	if strings.HasPrefix(path, "/api/") {
+		http.NotFound(w, r)
+		return
+	}
 
 	// Strip trailing slash (except root) to normalize
 	if path != "/" && strings.HasSuffix(path, "/") {

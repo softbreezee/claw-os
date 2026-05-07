@@ -416,5 +416,98 @@ func (f *FileStore) UpdateCronJobRun(ctx context.Context, jobID string, lastRun,
 	return fmt.Errorf("cron job not found: %s", jobID)
 }
 
+// --- Chat Tasks ---
+//
+// FileStore stores each task as a single JSON file under
+// {homeDir}/agents/{agentId}/tasks/{taskId}.json. ListChatTasks is
+// intentionally unsupported on this backend (returns ErrNotSupported);
+// the file backend is the single-user dev mode and we don't need
+// cross-task queries there. Use the database backend for production.
+
+func (f *FileStore) chatTaskPath(agentID, taskID string) string {
+	return filepath.Join(f.homeDir, "agents", agentID, "tasks", taskID+".json")
+}
+
+func (f *FileStore) CreateChatTask(ctx context.Context, tenantID string, t *ChatTaskRecord) error {
+	if t.Status == "" {
+		t.Status = ChatTaskPending
+	}
+	now := time.Now().UTC()
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = now
+	}
+	t.UpdatedAt = now
+	t.TenantID = tenantID
+
+	path := f.chatTaskPath(t.AgentID, t.ID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(t, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func (f *FileStore) UpdateChatTask(ctx context.Context, tenantID string, t *ChatTaskRecord) error {
+	t.UpdatedAt = time.Now().UTC()
+	t.TenantID = tenantID
+	path := f.chatTaskPath(t.AgentID, t.ID)
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("chat task %s: %w", t.ID, err)
+	}
+	data, err := json.MarshalIndent(t, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func (f *FileStore) GetChatTask(ctx context.Context, tenantID, taskID string) (*ChatTaskRecord, error) {
+	// File layout indexes by agentID, not taskID. Walk every agent's
+	// tasks/ directory until we find a match. Cheap because: (a) the
+	// file backend is single-user, (b) tasks/ holds at most a few dozen
+	// files in practice. For multi-tenant production use the DB backend.
+	agentsDir := filepath.Join(f.homeDir, "agents")
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("chat task not found: %s", taskID)
+		}
+		return nil, err
+	}
+	wantSuffix := taskID + ".json"
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		path := filepath.Join(agentsDir, e.Name(), "tasks", wantSuffix)
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			continue
+		}
+		var t ChatTaskRecord
+		if err := json.Unmarshal(data, &t); err != nil {
+			continue
+		}
+		return &t, nil
+	}
+	return nil, fmt.Errorf("chat task not found: %s", taskID)
+}
+
+func (f *FileStore) ListChatTasks(ctx context.Context, tenantID string, _ ChatTaskFilters) ([]ChatTaskRecord, error) {
+	return nil, ErrNotSupported
+}
+
+func (f *FileStore) DeleteChatTask(ctx context.Context, tenantID, taskID string) error {
+	rec, err := f.GetChatTask(ctx, tenantID, taskID)
+	if err != nil {
+		// Already gone is fine.
+		return nil
+	}
+	return os.Remove(f.chatTaskPath(rec.AgentID, rec.ID))
+}
+
 // Ensure FileStore implements Store.
 var _ Store = (*FileStore)(nil)

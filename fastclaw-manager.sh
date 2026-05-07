@@ -20,9 +20,11 @@ GLOBAL_BIN_NAME="fastclaw"
 # 服务配置
 DEFAULT_PORT=18953
 
-# 代理配置（根据需要修改）
-HTTP_PROXY="http://127.0.0.1:7890"
-HTTPS_PROXY="http://127.0.0.1:7890"
+# 代理配置（根据需要修改，代理服务未运行时请注释下面两行）
+# HTTP_PROXY="http://127.0.0.1:7890"
+# HTTPS_PROXY="http://127.0.0.1:7890"
+HTTP_PROXY=""
+HTTPS_PROXY=""
 
 # 颜色定义
 if [ -t 1 ]; then
@@ -139,7 +141,10 @@ ensure_path_in_shell() {
 # 启动服务（带日志）
 start_service() {
     local port=${1:-${DEFAULT_PORT}}
-    local timestamp=$(date +%Y%m%d-%H%M%S)
+    # Date-only timestamp so multiple restarts within a day append to the
+    # same log file instead of creating a new file per start.
+    local timestamp=$(date +%Y%m%d)
+    local boundary=$(date +%Y-%m-%d\ %H:%M:%S)
     
     heading "启动 FastClaw 服务"
     
@@ -148,11 +153,11 @@ start_service() {
     # 创建日志目录
     mkdir -p "${LOG_DIR}"
     
-    # 设置代理环境变量
-    export http_proxy="${HTTP_PROXY}"
-    export https_proxy="${HTTPS_PROXY}"
-    export HTTP_PROXY="${HTTP_PROXY}"
-    export HTTPS_PROXY="${HTTPS_PROXY}"
+    # 设置代理环境变量（HTTP_PROXY/HTTPS_PROXY 为空时不生效）
+    [ -n "${HTTP_PROXY}" ] && export http_proxy="${HTTP_PROXY}"
+    [ -n "${HTTPS_PROXY}" ] && export https_proxy="${HTTPS_PROXY}"
+    [ -n "${HTTP_PROXY}" ] && export HTTP_PROXY="${HTTP_PROXY}"
+    [ -n "${HTTPS_PROXY}" ] && export HTTPS_PROXY="${HTTPS_PROXY}"
     
     # 日志文件
     local stdout_log="${LOG_DIR}/fastclaw-${timestamp}.stdout.log"
@@ -178,10 +183,17 @@ start_service() {
     info "启动参数:"
     info "  端口: ${port}"
     info "  代理: ${HTTP_PROXY}"
-    info "  标准输出日志: ${stdout_log}"
-    info "  标准错误日志: ${stderr_log}"
+    info "  日志文件: ${combined_log}"
     echo ""
-    
+
+    # Boundary marker so multiple starts within one day file are visible.
+    {
+        printf '\n'
+        printf '========================================\n'
+        printf '[START] %s  PID=will-be-set  port=%s\n' "${boundary}" "${port}"
+        printf '========================================\n'
+    } | tee -a "${combined_log}" "${stdout_log}" >/dev/null
+
     # 启动命令
     "${SOURCE_BIN}" gateway --port "${port}" \
         > >(tee -a "${stdout_log}" | tee -a "${combined_log}") \

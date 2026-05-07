@@ -57,3 +57,8 @@ web/out/
 web/.next/
 
 openclaw.json
+
+# Third-party skill source archives (used by external integrate scripts).
+# Keep them out of git; the project ships only curated skills under skills/.
+temp_*/
+*.tar.gz

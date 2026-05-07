@@ -62,6 +62,42 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// MigrateChatTasks creates only the chat_tasks table + its indexes.
+// Used by callers that need the chat task subsystem (PR2) but cannot
+// run the full Migrate() because legacy table definitions still have
+// dialect-specific quirks (e.g. memory_logs uses AUTOINCREMENT which
+// is SQLite-only). Idempotent; safe to call on every startup.
+func (d *DBStore) MigrateChatTasks(ctx context.Context) error {
+	for _, stmt := range d.chatTasksMigrationSQL() {
+		if _, err := d.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrate chat_tasks: %w\nSQL: %s", err, stmt)
+		}
+	}
+	return nil
+}
+
+func (d *DBStore) chatTasksMigrationSQL() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS chat_tasks (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			session_key TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			message TEXT NOT NULL,
+			result TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			started_at TIMESTAMP,
+			done_at TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_tasks_agent ON chat_tasks (tenant_id, agent_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_tasks_status ON chat_tasks (status, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_tasks_session ON chat_tasks (tenant_id, agent_id, session_key, created_at DESC)`,
+	}
+}
+
 func (d *DBStore) migrationSQL() []string {
 	// Use TEXT for JSON columns (works in both postgres and sqlite).
 	// Postgres users can alter to JSONB later for indexing.
@@ -130,6 +166,23 @@ func (d *DBStore) migrationSQL() []string {
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_cron_jobs_schedule ON cron_jobs (tenant_id, enabled, next_run)`,
+		`CREATE TABLE IF NOT EXISTS chat_tasks (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			session_key TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			message TEXT NOT NULL,
+			result TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			started_at TIMESTAMP,
+			done_at TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_tasks_agent ON chat_tasks (tenant_id, agent_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_tasks_status ON chat_tasks (status, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_tasks_session ON chat_tasks (tenant_id, agent_id, session_key, created_at DESC)`,
 	}
 }
 
@@ -604,6 +657,151 @@ func (d *DBStore) scanCronJobs(rows *sql.Rows) ([]CronJobRecord, error) {
 		jobs = append(jobs, j)
 	}
 	return jobs, nil
+}
+
+// --- Chat Tasks ---
+
+func (d *DBStore) CreateChatTask(ctx context.Context, tenantID string, t *ChatTaskRecord) error {
+	if t.Status == "" {
+		t.Status = ChatTaskPending
+	}
+	now := time.Now().UTC()
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = now
+	}
+	t.UpdatedAt = now
+	t.TenantID = tenantID
+
+	q := fmt.Sprintf(
+		`INSERT INTO chat_tasks (id, tenant_id, agent_id, session_key, status, message, result, error, created_at, started_at, done_at, updated_at)
+		 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
+		d.ph(1), d.ph(2), d.ph(3), d.ph(4), d.ph(5), d.ph(6), d.ph(7), d.ph(8), d.ph(9), d.ph(10), d.ph(11), d.ph(12))
+	_, err := d.db.ExecContext(ctx, q,
+		t.ID, tenantID, t.AgentID, t.SessionKey, string(t.Status),
+		t.Message, t.Result, t.Error,
+		t.CreatedAt, nullableTime(t.StartedAt), nullableTime(t.DoneAt), t.UpdatedAt,
+	)
+	return err
+}
+
+func (d *DBStore) UpdateChatTask(ctx context.Context, tenantID string, t *ChatTaskRecord) error {
+	t.UpdatedAt = time.Now().UTC()
+	q := fmt.Sprintf(
+		`UPDATE chat_tasks
+		 SET status=%s, result=%s, error=%s, started_at=%s, done_at=%s, updated_at=%s
+		 WHERE id=%s AND tenant_id=%s`,
+		d.ph(1), d.ph(2), d.ph(3), d.ph(4), d.ph(5), d.ph(6), d.ph(7), d.ph(8))
+	res, err := d.db.ExecContext(ctx, q,
+		string(t.Status), t.Result, t.Error,
+		nullableTime(t.StartedAt), nullableTime(t.DoneAt), t.UpdatedAt,
+		t.ID, tenantID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (d *DBStore) GetChatTask(ctx context.Context, tenantID, taskID string) (*ChatTaskRecord, error) {
+	q := fmt.Sprintf(
+		`SELECT id, tenant_id, agent_id, session_key, status, message, result, error, created_at, started_at, done_at, updated_at
+		 FROM chat_tasks WHERE id=%s AND tenant_id=%s`, d.ph(1), d.ph(2))
+	row := d.db.QueryRowContext(ctx, q, taskID, tenantID)
+	return scanChatTask(row.Scan)
+}
+
+func (d *DBStore) ListChatTasks(ctx context.Context, tenantID string, f ChatTaskFilters) ([]ChatTaskRecord, error) {
+	limit := f.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+
+	// Build WHERE dynamically; placeholder index increments per condition
+	// to stay compatible with both postgres ($N) and sqlite (?).
+	var (
+		where = []string{fmt.Sprintf("tenant_id=%s", d.ph(1))}
+		args  = []any{tenantID}
+		idx   = 2
+	)
+	if f.AgentID != "" {
+		where = append(where, fmt.Sprintf("agent_id=%s", d.ph(idx)))
+		args = append(args, f.AgentID)
+		idx++
+	}
+	if f.SessionKey != "" {
+		where = append(where, fmt.Sprintf("session_key=%s", d.ph(idx)))
+		args = append(args, f.SessionKey)
+		idx++
+	}
+	if f.Status != "" {
+		where = append(where, fmt.Sprintf("status=%s", d.ph(idx)))
+		args = append(args, string(f.Status))
+		idx++
+	}
+	limPlaceholder := d.ph(idx)
+	offPlaceholder := d.ph(idx + 1)
+	args = append(args, limit, f.Offset)
+
+	q := fmt.Sprintf(
+		`SELECT id, tenant_id, agent_id, session_key, status, message, result, error, created_at, started_at, done_at, updated_at
+		 FROM chat_tasks WHERE %s
+		 ORDER BY created_at DESC LIMIT %s OFFSET %s`,
+		strings.Join(where, " AND "), limPlaceholder, offPlaceholder)
+
+	rows, err := d.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ChatTaskRecord
+	for rows.Next() {
+		t, err := scanChatTask(rows.Scan)
+		if err != nil {
+			continue
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
+func (d *DBStore) DeleteChatTask(ctx context.Context, tenantID, taskID string) error {
+	q := fmt.Sprintf(`DELETE FROM chat_tasks WHERE id=%s AND tenant_id=%s`, d.ph(1), d.ph(2))
+	_, err := d.db.ExecContext(ctx, q, taskID, tenantID)
+	return err
+}
+
+// scanChatTask works with both *sql.Row.Scan and *sql.Rows.Scan via the
+// passed function. Centralises the column order in one place.
+func scanChatTask(scan func(...any) error) (*ChatTaskRecord, error) {
+	var t ChatTaskRecord
+	var status string
+	var startedAt, doneAt sql.NullTime
+	if err := scan(&t.ID, &t.TenantID, &t.AgentID, &t.SessionKey, &status,
+		&t.Message, &t.Result, &t.Error,
+		&t.CreatedAt, &startedAt, &doneAt, &t.UpdatedAt); err != nil {
+		return nil, err
+	}
+	t.Status = ChatTaskStatus(status)
+	if startedAt.Valid {
+		t.StartedAt = &startedAt.Time
+	}
+	if doneAt.Valid {
+		t.DoneAt = &doneAt.Time
+	}
+	return &t, nil
+}
+
+// nullableTime converts a *time.Time into a sql.NullTime for DB writes.
+func nullableTime(t *time.Time) sql.NullTime {
+	if t == nil {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: *t, Valid: true}
 }
 
 // Ensure DBStore implements Store.
