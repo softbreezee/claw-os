@@ -62,20 +62,25 @@ type SandboxConfig struct {
 // SkillEnvProvider returns environment variables for a skill by name.
 type SkillEnvProvider func(skillName string) map[string]string
 
-func registerExec(r *Registry) {
-	registerExecWithSandbox(r, nil)
+func registerExec(r *Registry, workspace string) {
+	registerExecWithSandbox(r, nil, workspace)
 }
 
-func registerExecWithSandbox(r *Registry, sbCfg *SandboxConfig) {
-	registerExecFull(r, sbCfg, nil, nil)
+func registerExecWithSandbox(r *Registry, sbCfg *SandboxConfig, workspace string) {
+	registerExecFull(r, sbCfg, nil, nil, workspace)
 }
 
-// RegisterExecWithSkillEnv registers the exec tool with skill environment injection support.
-func RegisterExecWithSkillEnv(r *Registry, sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillDirs []string) {
-	registerExecFull(r, sbCfg, envProvider, skillDirs)
+// RegisterExecWithSkillEnv registers the exec tool with skill environment
+// injection support. workspace is the agent's root directory and becomes
+// the cwd of every `sh -c ...` we spawn — so a tool call like
+// `wget https://x.zip` lands in the agent's own directory instead of
+// the daemon's startup cwd. Sandbox mode already pins cwd via the
+// container, so this only affects the no-sandbox path.
+func RegisterExecWithSkillEnv(r *Registry, sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillDirs []string, workspace string) {
+	registerExecFull(r, sbCfg, envProvider, skillDirs, workspace)
 }
 
-func registerExecFull(r *Registry, sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillDirs []string) {
+func registerExecFull(r *Registry, sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillDirs []string, workspace string) {
 	r.Register("exec", "Execute a shell command and return stdout/stderr", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -93,14 +98,21 @@ func registerExecFull(r *Registry, sbCfg *SandboxConfig, envProvider SkillEnvPro
 			},
 		},
 		"required": []string{"command"},
-	}, makeExecToolFull(sbCfg, envProvider, skillDirs))
+	}, makeExecToolFull(sbCfg, envProvider, skillDirs, workspace))
 }
 
 func makeExecTool(sbCfg *SandboxConfig) ToolFunc {
-	return makeExecToolFull(sbCfg, nil, nil)
+	return makeExecToolFull(sbCfg, nil, nil, "")
 }
 
-func makeExecToolFull(sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillDirs []string) ToolFunc {
+// workspace is set to the agent's root directory at construction. When
+// non-empty AND we're not running through the sandbox, it becomes
+// cmd.Dir for every `sh -c ...` so all relative paths produced by the
+// LLM (downloads, cloned repos, scratch files, etc) anchor here instead
+// of inheriting the daemon's startup cwd. Empty workspace falls back to
+// process inherited cwd to preserve callers that didn't provide one
+// (notably the makeExecTool helper used by older registrations).
+func makeExecToolFull(sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillDirs []string, workspace string) ToolFunc {
 	return func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 		var args execArgs
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
@@ -140,6 +152,16 @@ func makeExecToolFull(sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillD
 		}
 
 		cmd := exec.CommandContext(execCtx, "sh", "-c", args.Command)
+
+		// Anchor cwd to the agent's workspace so wget / git clone / mkdir
+		// land where the LLM (and the file tools) expect them, not in
+		// whatever directory the gateway daemon was started from. We
+		// best-effort MkdirAll first because a freshly-configured
+		// workspace dir might not exist on disk yet.
+		if workspace != "" {
+			_ = os.MkdirAll(workspace, 0o755)
+			cmd.Dir = workspace
+		}
 
 		// Inject skill-specific env vars if the command references a skill directory
 		if envProvider != nil && skillDirs != nil {

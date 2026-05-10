@@ -221,6 +221,23 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 400 with a model-related complaint usually means the probe model
+	// (gpt-4o-mini fallback) isn't on the provider's allow-list. Hint
+	// the user to add their real model first and re-test.
+	if resp.StatusCode == http.StatusBadRequest && req.Model == "" {
+		bodyLower := strings.ToLower(string(respBody))
+		if strings.Contains(bodyLower, "model") {
+			hint := "The provider rejected the default probe model (gpt-4o-mini). " +
+				"Add the model(s) you actually want to use below, then click Test Connection again."
+			jsonResponse(w, http.StatusOK, map[string]any{
+				"ok":    false,
+				"error": hint + "\n\nProvider response: " + errMsg,
+				"url":   testURL,
+			})
+			return
+		}
+	}
+
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": false, "error": errMsg, "url": testURL})
 }
 

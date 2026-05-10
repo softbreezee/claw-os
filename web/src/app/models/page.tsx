@@ -21,17 +21,92 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Brain, Plus, Pencil, Trash2, Check, Key, Globe, Cpu, Layers } from "lucide-react";
+import { Brain, Plus, Pencil, Trash2, Key, Globe, Cpu, Layers, AlertCircle } from "lucide-react";
 import { getConfig, updateConfig, testProvider, type ModelEntry, type ProviderData } from "@/lib/api";
 
-const PROVIDER_PRESETS: Record<string, { apiBase: string; apiType: string }> = {
-  openrouter: { apiBase: "https://openrouter.ai/api/v1", apiType: "openai-chat" },
-  openai: { apiBase: "https://api.openai.com/v1", apiType: "openai-chat" },
-  anthropic: { apiBase: "https://api.anthropic.com/v1", apiType: "anthropic-messages" },
-  deepseek: { apiBase: "https://api.deepseek.com/v1", apiType: "openai-chat" },
-  groq: { apiBase: "https://api.groq.com/openai/v1", apiType: "openai-chat" },
-  ollama: { apiBase: "http://localhost:11434/v1", apiType: "openai-chat" },
-  custom: { apiBase: "", apiType: "openai-chat" },
+// ─── Provider presets ────────────────────────────────────────────────────────
+//
+// Each preset provides:
+//   - apiBase / apiType         : sensible defaults for the connection
+//   - suggestedModels           : a curated starter list of model IDs so users
+//                                 don't have to look up every provider's
+//                                 catalogue from scratch. They can still
+//                                 add/remove models freely afterwards.
+//
+// Keep the suggested list short and accurate – wrong defaults silently break
+// chat, which was the original bug.
+
+interface PresetSuggestedModel {
+  id: string;
+  name: string;
+  reasoning?: boolean;
+  contextWindow?: number;
+}
+
+interface PresetDef {
+  apiBase: string;
+  apiType: string;
+  suggestedModels: PresetSuggestedModel[];
+}
+
+const PROVIDER_PRESETS: Record<string, PresetDef> = {
+  openrouter: {
+    apiBase: "https://openrouter.ai/api/v1",
+    apiType: "openai-chat",
+    suggestedModels: [
+      { id: "deepseek/deepseek-chat", name: "DeepSeek Chat" },
+      { id: "anthropic/claude-3.5-sonnet", name: "Claude 3.5 Sonnet" },
+      { id: "openai/gpt-4o-mini", name: "GPT-4o mini" },
+    ],
+  },
+  openai: {
+    apiBase: "https://api.openai.com/v1",
+    apiType: "openai-chat",
+    suggestedModels: [
+      { id: "gpt-4o-mini", name: "GPT-4o mini" },
+      { id: "gpt-4o", name: "GPT-4o" },
+    ],
+  },
+  anthropic: {
+    apiBase: "https://api.anthropic.com/v1",
+    apiType: "anthropic-messages",
+    suggestedModels: [
+      { id: "claude-3-5-sonnet-latest", name: "Claude 3.5 Sonnet" },
+      { id: "claude-3-5-haiku-latest", name: "Claude 3.5 Haiku" },
+    ],
+  },
+  // NOTE: The "deepseek" preset historically pointed at api.deepseek.com,
+  // but in this deployment it's actually the internal gateway that only
+  // accepts the v4 family. We seed both so users get a working config out
+  // of the box. If/when you point this at the real DeepSeek public API,
+  // swap in `deepseek-chat` / `deepseek-reasoner`.
+  deepseek: {
+    apiBase: "https://api.deepseek.com/v1",
+    apiType: "openai-chat",
+    suggestedModels: [
+      { id: "deepseek-v4-flash", name: "DeepSeek v4 Flash" },
+      { id: "deepseek-v4-pro", name: "DeepSeek v4 Pro", reasoning: true },
+    ],
+  },
+  groq: {
+    apiBase: "https://api.groq.com/openai/v1",
+    apiType: "openai-chat",
+    suggestedModels: [
+      { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B" },
+    ],
+  },
+  ollama: {
+    apiBase: "http://localhost:11434/v1",
+    apiType: "openai-chat",
+    suggestedModels: [
+      { id: "llama3.2", name: "Llama 3.2" },
+    ],
+  },
+  custom: {
+    apiBase: "",
+    apiType: "openai-chat",
+    suggestedModels: [],
+  },
 };
 
 const API_TYPE_OPTIONS = [
@@ -54,14 +129,14 @@ interface ProviderEntry {
   models: ModelEntry[];
 }
 
-function emptyModel(): ModelEntry {
+function emptyModel(suggested?: PresetSuggestedModel): ModelEntry {
   return {
-    id: "",
-    name: "",
-    reasoning: false,
+    id: suggested?.id || "",
+    name: suggested?.name || "",
+    reasoning: suggested?.reasoning ?? false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
+    contextWindow: suggested?.contextWindow ?? 200000,
     maxTokens: 8192,
   };
 }
@@ -70,8 +145,6 @@ export default function ModelsPage() {
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [model, setModel] = useState("");
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -80,9 +153,11 @@ export default function ModelsPage() {
   const [formName, setFormName] = useState("");
   const [formApiBase, setFormApiBase] = useState("");
   const [formApiKey, setFormApiKey] = useState("");
+  const [formMaskedKey, setFormMaskedKey] = useState("");
   const [formApiType, setFormApi] = useState("openai-chat");
   const [formAuthType, setFormAuthType] = useState("api-key");
   const [formModels, setFormModels] = useState<ModelEntry[]>([]);
+  const [formError, setFormError] = useState<string>("");
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [testError, setTestError] = useState("");
 
@@ -90,6 +165,7 @@ export default function ModelsPage() {
   const allModelOptions: { value: string; label: string }[] = [];
   for (const p of providers) {
     for (const m of p.models) {
+      if (!m.id) continue;
       allModelOptions.push({
         value: `${p.name}/${m.id}`,
         label: `${p.name}/${m.name || m.id}`,
@@ -140,26 +216,31 @@ export default function ModelsPage() {
   };
 
   const saveToBackend = async (providersList: ProviderEntry[], defaultModel?: string) => {
-    setSaving(true);
     await updateConfig({
       providers: buildProvidersMap(providersList),
       agents: { defaults: { model: defaultModel ?? model } },
     });
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
     fetchConfig();
   };
 
   const openAddDialog = () => {
+    const preset = PROVIDER_PRESETS["openrouter"];
     setEditingName(null);
     setFormPreset("openrouter");
     setFormName("openrouter");
-    setFormApiBase(PROVIDER_PRESETS["openrouter"].apiBase);
-    setFormApi(PROVIDER_PRESETS["openrouter"].apiType);
+    setFormApiBase(preset.apiBase);
+    setFormApi(preset.apiType);
     setFormAuthType("api-key");
     setFormApiKey("");
-    setFormModels([]);
+    setFormMaskedKey("");
+    // Seed with the preset's suggested models so the user sees a working
+    // configuration out of the box (and so we never silently save 0 models).
+    setFormModels(
+      preset.suggestedModels.length > 0
+        ? preset.suggestedModels.map((s) => emptyModel(s))
+        : [emptyModel()]
+    );
+    setFormError("");
     setTestStatus("idle");
     setTestError("");
     setDialogOpen(true);
@@ -174,7 +255,16 @@ export default function ModelsPage() {
     setFormApi(provider.apiType);
     setFormAuthType(provider.authType || "api-key");
     setFormApiKey("");
-    setFormModels(provider.models.map((m) => ({ ...m, cost: { ...m.cost }, input: [...m.input] })));
+    setFormMaskedKey(provider.maskedKey);
+    // If editing an existing provider that somehow has zero models, give them
+    // a blank row to fill in rather than an empty section.
+    const baseModels = provider.models.map((m) => ({
+      ...m,
+      cost: { ...m.cost },
+      input: [...m.input],
+    }));
+    setFormModels(baseModels.length > 0 ? baseModels : [emptyModel()]);
+    setFormError("");
     setTestStatus("idle");
     setTestError("");
     setDialogOpen(true);
@@ -182,15 +272,25 @@ export default function ModelsPage() {
 
   const handlePresetChange = (preset: string) => {
     setFormPreset(preset);
+    const def = PROVIDER_PRESETS[preset];
     if (preset !== "custom") {
       setFormName(preset);
-      setFormApiBase(PROVIDER_PRESETS[preset].apiBase);
-      setFormApi(PROVIDER_PRESETS[preset].apiType);
+      setFormApiBase(def.apiBase);
+      setFormApi(def.apiType);
+      // Replace the model list with the new preset's suggestions so each
+      // preset comes with a sensible, working default.
+      setFormModels(
+        def.suggestedModels.length > 0
+          ? def.suggestedModels.map((s) => emptyModel(s))
+          : [emptyModel()]
+      );
     } else {
       setFormName("");
       setFormApiBase("");
       setFormApi("openai-chat");
+      setFormModels([emptyModel()]);
     }
+    setFormError("");
     setTestStatus("idle");
     setTestError("");
   };
@@ -199,10 +299,16 @@ export default function ModelsPage() {
     setTestStatus("testing");
     setTestError("");
     try {
+      // Use the first model the user has configured for the probe request.
+      // Many providers (DeepSeek, internal gateways, locked-down endpoints)
+      // reject a hard-coded gpt-4o-mini default, so prefer a real model.
+      const probeModel = formModels.find((m) => m.id.trim())?.id.trim() || "";
       const result = await testProvider({
         apiBase: formApiBase,
-        apiKey: formApiKey,
-        model: "",
+        // When editing an existing provider, fall back to the stored key
+        // rather than testing with an empty string.
+        apiKey: formApiKey || formMaskedKey,
+        model: probeModel,
         apiType: formApiType,
         authType: formAuthType,
       });
@@ -241,48 +347,86 @@ export default function ModelsPage() {
 
   const handleSaveProvider = async () => {
     const name = formName.toLowerCase().trim().replace(/\s+/g, "-");
-    if (!name) return;
+    if (!name) {
+      setFormError("Provider name is required");
+      return;
+    }
+    if (!formApiBase.trim()) {
+      setFormError("API Base URL is required");
+      return;
+    }
+
+    const validModels = formModels.filter((m) => m.id.trim());
+    if (validModels.length === 0) {
+      setFormError(
+        "Please add at least one model with a valid Model ID (e.g. \"deepseek-chat\", \"gpt-4o-mini\")."
+      );
+      return;
+    }
 
     const filtered = editingName
       ? providers.filter((p) => p.name !== editingName)
       : providers;
+
+    // Detect duplicate provider name on add
+    if (!editingName && filtered.some((p) => p.name === name)) {
+      setFormError(`Provider \"${name}\" already exists. Use Edit instead.`);
+      return;
+    }
+
     const updated = [
       ...filtered,
       {
         name,
-        apiBase: formApiBase,
+        apiBase: formApiBase.trim(),
         apiKey: formApiKey,
-        maskedKey: formApiKey ? "sk-****" : "",
+        // Preserve the masked key on the in-memory entry so the UI keeps
+        // showing it after save; the backend reuses the stored key when
+        // apiKey is empty / masked.
+        maskedKey: formApiKey
+          ? `sk-${formApiKey.slice(-4).padStart(4, "*")}`
+          : formMaskedKey,
         apiType: formApiType,
         authType: formAuthType,
-        models: formModels.filter((m) => m.id.trim()),
+        models: validModels,
       },
     ];
     setProviders(updated);
     setDialogOpen(false);
-    await saveToBackend(updated);
+
+    // If the default model still references the deleted/renamed provider,
+    // or we just created the very first model, point it at a sane default.
+    let newDefault = model;
+    const prefixes = updated.flatMap((p) => p.models.map((m) => `${p.name}/${m.id}`));
+    if (!prefixes.includes(newDefault) && prefixes.length > 0) {
+      newDefault = prefixes[0];
+      setModel(newDefault);
+    }
+
+    await saveToBackend(updated, newDefault);
   };
 
   const handleDeleteProvider = async (name: string) => {
+    if (!confirm(`Remove provider "${name}"? This cannot be undone.`)) return;
     const updated = providers.filter((p) => p.name !== name);
     setProviders(updated);
-    await saveToBackend(updated);
-  };
 
-  const handleSaveAll = async () => {
-    await saveToBackend(providers);
+    // Re-point default model if it referenced the removed provider
+    let newDefault = model;
+    if (newDefault.startsWith(`${name}/`)) {
+      const prefixes = updated.flatMap((p) => p.models.map((m) => `${p.name}/${m.id}`));
+      newDefault = prefixes[0] || "";
+      setModel(newDefault);
+    }
+    await saveToBackend(updated, newDefault);
   };
 
   const handleDefaultModelChange = async (value: string) => {
     setModel(value);
-    setSaving(true);
     await updateConfig({
       providers: buildProvidersMap(providers),
       agents: { defaults: { model: value } },
     });
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
   };
 
   if (loading) {
@@ -298,6 +442,8 @@ export default function ModelsPage() {
     );
   }
 
+  const noModelsAtAll = allModelOptions.length === 0;
+
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
@@ -307,27 +453,10 @@ export default function ModelsPage() {
             Manage LLM providers and default model
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={openAddDialog}>
-            <Plus className="h-4 w-4 mr-2" />
-            Add Provider
-          </Button>
-          <Button
-            onClick={handleSaveAll}
-            disabled={saving}
-            variant={saved ? "outline" : "default"}
-            className={saved ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400" : ""}
-          >
-            {saved ? (
-              <>
-                <Check className="h-4 w-4 mr-2" />
-                Saved
-              </>
-            ) : (
-              saving ? "Saving..." : "Save"
-            )}
-          </Button>
-        </div>
+        <Button variant="outline" onClick={openAddDialog}>
+          <Plus className="h-4 w-4 mr-2" />
+          Add Provider
+        </Button>
       </div>
 
       {/* Default Model */}
@@ -336,7 +465,14 @@ export default function ModelsPage() {
           <Cpu className="h-4 w-4 text-primary" />
           <h3 className="font-medium">Default Model</h3>
         </div>
-        {allModelOptions.length > 0 ? (
+        {noModelsAtAll ? (
+          <div className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+            <span>
+              No models available yet. Add a provider with at least one model below to enable agents.
+            </span>
+          </div>
+        ) : (
           <Select value={model} onValueChange={(v: string | null) => v && handleDefaultModelChange(v)}>
             <SelectTrigger className="font-mono text-sm max-w-md">
               <SelectValue placeholder="Select a model" />
@@ -349,16 +485,9 @@ export default function ModelsPage() {
               ))}
             </SelectContent>
           </Select>
-        ) : (
-          <Input
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="e.g. openai/gpt-4o"
-            className="font-mono text-sm max-w-md"
-          />
         )}
         <p className="text-xs text-muted-foreground mt-2">
-          Used by agents unless overridden in agent config
+          Used by agents unless overridden in agent config. Saved automatically.
         </p>
       </div>
 
@@ -381,59 +510,69 @@ export default function ModelsPage() {
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {providers.map((provider) => (
-            <div
-              key={provider.name}
-              className="group rounded-lg border border-border bg-card p-5 transition-colors hover:bg-muted/50"
-            >
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600">
-                  <Brain className="h-6 w-6 text-white" />
+          {providers.map((provider) => {
+            const hasModels = provider.models.length > 0;
+            return (
+              <div
+                key={provider.name}
+                className="group rounded-lg border border-border bg-card p-5 transition-colors hover:bg-muted/50"
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600">
+                    <Brain className="h-6 w-6 text-white" />
+                  </div>
+                  {hasModels ? (
+                    <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20">
+                      <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      Active
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20">
+                      <AlertCircle className="h-3 w-3 mr-1" />
+                      No models
+                    </Badge>
+                  )}
                 </div>
-                <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20">
-                  <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                  Active
-                </Badge>
+                <p className="text-base font-medium mb-2">{provider.name}</p>
+                <div className="space-y-1 text-sm text-muted-foreground">
+                  <div className="flex items-center gap-1.5">
+                    <Globe className="h-3 w-3" />
+                    <span className="font-mono text-xs truncate">{provider.apiBase || "Not set"}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Key className="h-3 w-3" />
+                    <span className="font-mono text-xs">{provider.maskedKey || "Not set"}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Layers className="h-3 w-3" />
+                    <span className="font-mono text-xs">
+                      {provider.models.length} model{provider.models.length !== 1 ? "s" : ""}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 mt-4 pt-3 border-t border-border">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => openEditDialog(provider)}
+                  >
+                    <Pencil className="h-3 w-3 mr-1.5" />
+                    Edit
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 text-xs text-destructive hover:text-destructive"
+                    onClick={() => handleDeleteProvider(provider.name)}
+                  >
+                    <Trash2 className="h-3 w-3 mr-1.5" />
+                    Remove
+                  </Button>
+                </div>
               </div>
-              <p className="text-base font-medium mb-2">{provider.name}</p>
-              <div className="space-y-1 text-sm text-muted-foreground">
-                <div className="flex items-center gap-1.5">
-                  <Globe className="h-3 w-3" />
-                  <span className="font-mono text-xs truncate">{provider.apiBase || "Not set"}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Key className="h-3 w-3" />
-                  <span className="font-mono text-xs">{provider.maskedKey || "Not set"}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Layers className="h-3 w-3" />
-                  <span className="font-mono text-xs">
-                    {provider.models.length} model{provider.models.length !== 1 ? "s" : ""}
-                  </span>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 mt-4 pt-3 border-t border-border">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => openEditDialog(provider)}
-                >
-                  <Pencil className="h-3 w-3 mr-1.5" />
-                  Edit
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 text-xs text-destructive hover:text-destructive"
-                  onClick={() => handleDeleteProvider(provider.name)}
-                >
-                  <Trash2 className="h-3 w-3 mr-1.5" />
-                  Remove
-                </Button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -468,6 +607,11 @@ export default function ModelsPage() {
                   ))}
                 </SelectContent>
               </Select>
+              {!editingName && formPreset !== "custom" && (
+                <p className="text-[11px] text-muted-foreground/70">
+                  Selecting a preset fills in the API base, type and a starter list of models.
+                </p>
+              )}
             </div>
             {formPreset === "custom" && (
               <div className="space-y-2">
@@ -500,12 +644,12 @@ export default function ModelsPage() {
                 type="password"
                 value={formApiKey}
                 onChange={(e) => setFormApiKey(e.target.value)}
-                placeholder="sk-..."
+                placeholder={editingName && formMaskedKey ? `Current: ${formMaskedKey}` : "sk-..."}
                 className="font-mono text-sm"
               />
               {editingName && (
                 <p className="text-[11px] text-muted-foreground/60">
-                  Leave empty to keep existing key
+                  Leave empty to keep the existing key.
                 </p>
               )}
             </div>
@@ -578,7 +722,12 @@ export default function ModelsPage() {
             {/* Models Section */}
             <div className="space-y-3 pt-2 border-t border-border">
               <div className="flex items-center justify-between">
-                <Label className="text-base">Models</Label>
+                <div>
+                  <Label className="text-base">Models</Label>
+                  <p className="text-[11px] text-muted-foreground/70 mt-1">
+                    Use the model ID from the provider&apos;s API docs (e.g. <code>deepseek-chat</code>, <code>gpt-4o-mini</code>).
+                  </p>
+                </div>
                 <Button variant="outline" size="sm" onClick={handleAddModel}>
                   <Plus className="h-3 w-3 mr-1.5" />
                   Add Model
@@ -587,7 +736,7 @@ export default function ModelsPage() {
 
               {formModels.length === 0 && (
                 <p className="text-sm text-muted-foreground/60 text-center py-4">
-                  No models configured. Add models to use with this provider.
+                  No models configured. Click &quot;Add Model&quot; above.
                 </p>
               )}
 
@@ -609,11 +758,11 @@ export default function ModelsPage() {
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <Label className="text-xs">Model ID</Label>
+                      <Label className="text-xs">Model ID *</Label>
                       <Input
                         value={m.id}
                         onChange={(e) => handleUpdateModel(idx, "id", e.target.value)}
-                        placeholder="e.g. gpt-4o"
+                        placeholder="e.g. deepseek-chat"
                         className="font-mono text-xs h-8"
                       />
                     </div>
@@ -622,7 +771,7 @@ export default function ModelsPage() {
                       <Input
                         value={m.name}
                         onChange={(e) => handleUpdateModel(idx, "name", e.target.value)}
-                        placeholder="e.g. GPT-4o"
+                        placeholder="e.g. DeepSeek Chat"
                         className="text-xs h-8"
                       />
                     </div>
@@ -630,6 +779,14 @@ export default function ModelsPage() {
                 </div>
               ))}
             </div>
+
+            {/* Inline form error */}
+            {formError && (
+              <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>

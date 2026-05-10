@@ -47,37 +47,17 @@ type Gateway struct {
 func New(cfg *config.Config) (*Gateway, error) {
 	mb := bus.New()
 
-	// Create LLM provider — resolve from default model's provider prefix,
-	// then try known keys, fall back to first available.
-	var providerCfg config.ProviderConfig
-	defaultModel := cfg.Agents.Defaults.Model
-	if parts := strings.SplitN(defaultModel, "/", 2); len(parts) == 2 {
-		if p, ok := cfg.Providers[parts[0]]; ok {
-			providerCfg = p
-		}
-	}
-	if providerCfg.APIKey == "" {
-		for _, key := range []string{"default", "openai", "openrouter"} {
-			if p, ok := cfg.Providers[key]; ok {
-				providerCfg = p
-				break
-			}
-		}
-	}
-	if providerCfg.APIKey == "" {
-		for _, p := range cfg.Providers {
-			providerCfg = p
-			break
-		}
-	}
-	slog.Info("provider config resolved", "apiBase", providerCfg.APIBase, "apiType", providerCfg.APIType, "defaultModel", defaultModel)
-	llm := provider.NewProvider(providerCfg.APIKey, providerCfg.APIBase, providerCfg.APIType)
+	// Build the provider registry: one Provider instance per entry
+	// under cfg.Providers. Agent->provider routing is driven by the
+	// "provider/" prefix on each agent's model field; see
+	// provider.Registry for the resolution rules.
+	registry := buildProviderRegistry(cfg)
 
 	// Resolve agent configs
 	resolved := config.ResolveAgents(cfg)
 
 	// Create agent manager
-	agentMgr, err := agent.NewManager(resolved, llm, mb)
+	agentMgr, err := agent.NewManager(resolved, registry, mb)
 	if err != nil {
 		return nil, err
 	}
@@ -308,6 +288,73 @@ func (g *Gateway) TaskQueue() *taskqueue.Queue {
 }
 
 // Run starts the gateway and blocks until shutdown signal.
+// buildProviderRegistry walks cfg.Providers and builds one Provider
+// per entry, then picks the default Provider for unprefixed model
+// names. Resolution order for the default:
+//
+//  1. The provider whose name matches the prefix of cfg.Agents.Defaults.Model
+//     (so a default model of "openai/foo" makes "openai" the default).
+//  2. The first of "default" / "openai" / "openrouter" that is registered.
+//  3. Any registered provider — deterministic-ish via Go's map iteration
+//     would be bad, so we sort lexicographically before picking.
+//
+// We log every registered provider on start so misconfigurations show
+// up in the gateway log instead of silently 4xx-ing later.
+func buildProviderRegistry(cfg *config.Config) *provider.Registry {
+	reg := provider.NewRegistry()
+
+	// Collect names so the default-resolution log line is reproducible.
+	names := make([]string, 0, len(cfg.Providers))
+	for name, pCfg := range cfg.Providers {
+		if pCfg.APIBase == "" && pCfg.APIKey == "" {
+			slog.Warn("provider entry empty, skipping", "name", name)
+			continue
+		}
+		p := provider.NewProvider(pCfg.APIKey, pCfg.APIBase, pCfg.APIType)
+		reg.Set(name, p)
+		names = append(names, name)
+		slog.Info("provider registered", "name", name, "apiBase", pCfg.APIBase, "apiType", pCfg.APIType)
+	}
+
+	// Pick the default. We mirror the historical fallback chain so
+	// existing single-provider configs (no provider/ prefix on the
+	// model) keep working.
+	defaultModel := cfg.Agents.Defaults.Model
+	chosen := ""
+	if idx := strings.Index(defaultModel, "/"); idx > 0 {
+		candidate := defaultModel[:idx]
+		if reg.Has(candidate) {
+			chosen = candidate
+		}
+	}
+	if chosen == "" {
+		for _, key := range []string{"default", "openai", "openrouter"} {
+			if reg.Has(key) {
+				chosen = key
+				break
+			}
+		}
+	}
+	if chosen == "" && len(names) > 0 {
+		// Pick deterministically rather than relying on map order.
+		chosen = names[0]
+		for _, n := range names {
+			if n < chosen {
+				chosen = n
+			}
+		}
+	}
+	if chosen != "" {
+		reg.SetDefault(chosen)
+	}
+	slog.Info("provider registry built",
+		"providers", reg.Names(),
+		"default", chosen,
+		"defaultModel", defaultModel,
+	)
+	return reg
+}
+
 func (g *Gateway) Run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

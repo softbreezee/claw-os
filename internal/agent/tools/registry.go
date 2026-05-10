@@ -24,6 +24,19 @@ const (
 // Registry holds all registered tools.
 type Registry struct {
 	tools map[string]registeredTool
+
+	// workspace is the agent's root directory. Stored on the registry so
+	// later registrations (Skill env injection, sandbox toggling, etc)
+	// can reuse the value instead of having every caller pass it again.
+	// All file/exec tool product paths are anchored here.
+	workspace string
+}
+
+// Workspace returns the agent's root directory captured at construction.
+// Used by exec to set cmd.Dir, and by callers that need to anchor paths
+// relative to the agent rather than the daemon's startup cwd.
+func (r *Registry) Workspace() string {
+	return r.workspace
 }
 
 type registeredTool struct {
@@ -35,7 +48,8 @@ type registeredTool struct {
 // NewRegistry creates a new tool registry with built-in tools.
 func NewRegistry(workspace string) *Registry {
 	r := &Registry{
-		tools: make(map[string]registeredTool),
+		tools:     make(map[string]registeredTool),
+		workspace: workspace,
 	}
 	r.registerBuiltins(workspace)
 	return r
@@ -107,11 +121,11 @@ func (r *Registry) Execute(ctx context.Context, name string, args string) (strin
 
 // SetSandboxConfig updates the exec tool to use sandbox mode.
 func (r *Registry) SetSandboxConfig(sbCfg *SandboxConfig) {
-	registerExecWithSandbox(r, sbCfg)
+	registerExecWithSandbox(r, sbCfg, r.workspace)
 }
 
 func (r *Registry) registerBuiltins(workspace string) {
-	registerExec(r)
+	registerExec(r, workspace)
 	registerFile(r, workspace)
 	registerMessage(r)
 }

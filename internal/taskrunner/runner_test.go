@@ -162,7 +162,7 @@ func TestRunner_HappyPath(t *testing.T) {
 	r := New(st, bus, &fakeResolver{ag: ag}, Options{Timeout: 2 * time.Second})
 	defer r.Stop()
 
-	taskID, err := r.Submit(context.Background(), "agent-1", "sess-1", "hello")
+	taskID, err := r.Submit(context.Background(), "agent-1", "sess-1", "hello", "")
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestRunner_Cancel(t *testing.T) {
 	r := New(st, bus, &fakeResolver{ag: ag}, Options{Timeout: 5 * time.Second})
 	defer r.Stop()
 
-	taskID, err := r.Submit(context.Background(), "agent-1", "sess-1", "go")
+	taskID, err := r.Submit(context.Background(), "agent-1", "sess-1", "go", "")
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestRunner_Timeout(t *testing.T) {
 	r := New(st, bus, &fakeResolver{ag: ag}, Options{Timeout: 100 * time.Millisecond})
 	defer r.Stop()
 
-	taskID, err := r.Submit(context.Background(), "agent-1", "sess-1", "go")
+	taskID, err := r.Submit(context.Background(), "agent-1", "sess-1", "go", "")
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -319,8 +319,8 @@ func TestRunner_PerSessionSerial(t *testing.T) {
 	r := New(st, bus, &fakeResolver{ag: ag}, Options{Timeout: 5 * time.Second})
 	defer r.Stop()
 
-	t1, _ := r.Submit(context.Background(), "agent-1", "session-A", "1")
-	t2, _ := r.Submit(context.Background(), "agent-1", "session-A", "2")
+	t1, _ := r.Submit(context.Background(), "agent-1", "session-A", "1", "")
+	t2, _ := r.Submit(context.Background(), "agent-1", "session-A", "2", "")
 
 	ch1, c1 := bus.Subscribe(TopicFor(t1))
 	defer c1()
@@ -357,7 +357,7 @@ func TestRunner_EventsAfterAndSeqMonotonic(t *testing.T) {
 	r := New(st, bus, &fakeResolver{ag: ag}, Options{Timeout: 2 * time.Second})
 	defer r.Stop()
 
-	taskID, _ := r.Submit(context.Background(), "agent-1", "sess-1", "go")
+	taskID, _ := r.Submit(context.Background(), "agent-1", "sess-1", "go", "")
 
 	// Wait for completion via subscription.
 	ch, cancel := bus.Subscribe(TopicFor(taskID))
@@ -408,7 +408,7 @@ func TestRunner_TerminalStatePersisted(t *testing.T) {
 	r := New(st, bus, &fakeResolver{ag: ag}, Options{Timeout: time.Second})
 	defer r.Stop()
 
-	taskID, _ := r.Submit(context.Background(), "agent-1", "sess-1", "x")
+	taskID, _ := r.Submit(context.Background(), "agent-1", "sess-1", "x", "")
 	// Wait for completion via subscription.
 	ch, cancel := bus.Subscribe(TopicFor(taskID))
 	defer cancel()

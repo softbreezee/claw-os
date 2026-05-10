@@ -134,7 +134,7 @@ func NewAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider.Provider, mb *
 
 	// Set up skill env injection for exec tool
 	skillDirs := loader.AllSkillDirs()
-	tools.RegisterExecWithSkillEnv(registry, nil, loader.SkillEnvVars, skillDirs)
+	tools.RegisterExecWithSkillEnv(registry, nil, loader.SkillEnvVars, skillDirs, rc.Workspace)
 
 	if len(skills) > 0 {
 		slog.Info("loaded skills", "agent", rc.ID, "count", len(skills))
@@ -149,13 +149,16 @@ func NewAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider.Provider, mb *
 
 	eng := newSDKEngine(rc.ID)
 
+	ctxBuilder := newContextBuilderWithThinking(rc.Workspace, memory, skillsSummary, rc.Thinking)
+	ctxBuilder.SetModel(rc.Model)
+
 	ag := &Agent{
 		name:              rc.ID,
 		provider:          prov,
 		registry:          registry,
 		sessions:          session.NewManager(rc.Workspace + "/sessions"),
 		memory:            memory,
-		ctxBuilder:        newContextBuilderWithThinking(rc.Workspace, memory, skillsSummary, rc.Thinking),
+		ctxBuilder:        ctxBuilder,
 		hooks:             hooks,
 		model:             rc.Model,
 		maxTokens:         rc.MaxTokens,
@@ -248,17 +251,23 @@ func (a *Agent) HandleWebChat(ctx context.Context, sessionId, text string) strin
 }
 
 // HandleWebChatStream handles a web chat message with real-time event streaming.
+//
+// Attachments are pulled out of context (set by the taskrunner from
+// per-task pendingAttachments) so this function's signature stays
+// stable — taskrunner.AgentHandle is a small interface and changing
+// it ripples into tests and mocks.
 func (a *Agent) HandleWebChatStream(ctx context.Context, sessionId, text string, events chan<- ChatEvent) string {
 	if sessionId == "" {
 		sessionId = "web-ui"
 	}
 	ctx = ContextWithChatEvents(ctx, events)
 	msg := bus.InboundMessage{
-		Channel:  "web",
-		ChatID:   sessionId,
-		UserID:   "web-user",
-		Text:     text,
-		PeerKind: "dm",
+		Channel:     "web",
+		ChatID:      sessionId,
+		UserID:      "web-user",
+		Text:        text,
+		PeerKind:    "dm",
+		Attachments: AttachmentsFromContext(ctx),
 	}
 	return a.HandleMessage(ctx, msg)
 }
@@ -365,6 +374,17 @@ func (a *Agent) Sessions() *session.Manager {
 }
 
 // WebChatHistory returns chat history for a specific web session.
+//
+// Multimodal handling: when a user message has ContentParts (i.e. was
+// uploaded with attached files), we project text and images out of
+// ContentParts into the API response so the chat UI can render image
+// thumbnails on history reload.
+//
+// We deliberately keep image data: URLs intact in the response — the
+// alternative (re-resolving back to /api/files paths) would require
+// remembering original Attachment paths through the session round-trip,
+// which neither the bus nor the persisted message format does today.
+// data: URLs work; the cost is bandwidth on history fetch.
 func (a *Agent) WebChatHistory(sessionId string) []map[string]any {
 	if sessionId == "" {
 		sessionId = "web-ui"
@@ -375,12 +395,18 @@ func (a *Agent) WebChatHistory(sessionId string) []map[string]any {
 	for _, m := range msgs {
 		switch m.Role {
 		case "user":
-			if m.Content != "" {
-				history = append(history, map[string]any{
-					"role":    "user",
-					"content": m.Content,
-				})
+			text, attachments := flattenUserContent(m)
+			if text == "" && len(attachments) == 0 {
+				continue
 			}
+			entry := map[string]any{
+				"role":    "user",
+				"content": text,
+			}
+			if len(attachments) > 0 {
+				entry["attachments"] = attachments
+			}
+			history = append(history, entry)
 		case "assistant":
 			entry := map[string]any{"role": "assistant"}
 			if m.Content != "" {
@@ -453,15 +479,11 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// Hook: AfterSystemPrompt
 	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterSystemPrompt})
 
-	// Store the raw user message
-	userMsg := provider.Message{Role: "user", Content: msg.Text}
-	if msg.PhotoURL != "" {
-		userMsg.Content = ""
-		userMsg.ContentParts = []provider.ContentPart{
-			{Type: "text", Text: msg.Text},
-			{Type: "image_url", ImageURL: &provider.ImageURL{URL: msg.PhotoURL, Detail: "auto"}},
-		}
-	}
+	// Store the raw user message. Order of fall-through:
+	//   1. New `Attachments` field (Web UI multi-file path)
+	//   2. Legacy `PhotoURL` (Telegram single-photo path)
+	//   3. Plain text
+	userMsg := buildUserMessage(msg)
 	sess.Append(userMsg)
 
 	// Context compaction: check if session messages are too large
@@ -527,7 +549,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 
 		llmMessages = filterOrphanedToolCalls(llmMessages)
 
-		resp, err := a.getProvider().Chat(ctx, llmMessages, toolDefs, a.model, a.maxTokens, a.temperature)
+		resp, err := a.getProvider().Chat(ctx, llmMessages, toolDefs, effectiveModel(ctx, a.model), a.maxTokens, a.temperature)
 
 		// Hook: AfterModelCall
 		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime}
@@ -730,15 +752,8 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 	systemPrompt := a.ctxBuilder.BuildSystemPrompt()
 	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterSystemPrompt})
 
-	// Store raw user message
-	userMsg := provider.Message{Role: "user", Content: msg.Text}
-	if msg.PhotoURL != "" {
-		userMsg.Content = ""
-		userMsg.ContentParts = []provider.ContentPart{
-			{Type: "text", Text: msg.Text},
-			{Type: "image_url", ImageURL: &provider.ImageURL{URL: msg.PhotoURL, Detail: "auto"}},
-		}
-	}
+	// Store raw user message — see HandleMessage for the fall-through rules.
+	userMsg := buildUserMessage(msg)
 	sess.Append(userMsg)
 
 	sessionMsgs := sess.GetMessages()
@@ -780,7 +795,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 		hcBefore := &HookContext{AgentName: a.name, Point: BeforeModelCall, Messages: messages}
 		a.hooks.Run(ctx, hcBefore)
 
-		resp, err := a.getProvider().Chat(ctx, filterOrphanedToolCalls(messages), toolDefs, a.model, a.maxTokens, a.temperature)
+		resp, err := a.getProvider().Chat(ctx, filterOrphanedToolCalls(messages), toolDefs, effectiveModel(ctx, a.model), a.maxTokens, a.temperature)
 
 		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime}
 		a.hooks.Run(ctx, hcAfter)
@@ -792,7 +807,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 
 		if !resp.HasToolCalls() {
 			// Final response - use streaming
-			sr, err := a.getProvider().ChatStream(ctx, filterOrphanedToolCalls(messages), toolDefs, a.model, a.maxTokens, a.temperature)
+			sr, err := a.getProvider().ChatStream(ctx, filterOrphanedToolCalls(messages), toolDefs, effectiveModel(ctx, a.model), a.maxTokens, a.temperature)
 			if err != nil {
 				slog.Error("LLM stream failed, falling back", "agent", a.name, "error", err)
 				sess.Append(provider.Message{Role: "assistant", Content: resp.Content})
@@ -913,6 +928,11 @@ func (a *Agent) UpdateConfig(rc config.ResolvedAgent) {
 	a.maxTokens = rc.MaxTokens
 	a.temperature = rc.Temperature
 	a.maxToolIterations = rc.MaxToolIterations
+	// Keep the system-prompt identity in sync so the agent reports the
+	// correct model when asked.
+	if a.ctxBuilder != nil {
+		a.ctxBuilder.SetModel(rc.Model)
+	}
 }
 
 // ReloadWorkspaceFiles re-reads workspace .md files (SOUL.md, AGENTS.md, etc.)
@@ -924,6 +944,11 @@ func (a *Agent) ReloadWorkspaceFiles() {
 	skills := loader.LoadSkills()
 	skillsSummary := loader.BuildSkillsSummary(skills)
 	a.ctxBuilder = NewContextBuilder(a.workspacePath, a.memory, skillsSummary)
+	// Re-apply current model + thinking level to the freshly built builder.
+	a.ctxBuilder.SetModel(a.model)
+	if a.thinking != "" {
+		a.ctxBuilder.SetThinking(a.thinking)
+	}
 }
 
 // extractMediaPaths scans tool output for MEDIA: lines and returns file paths.

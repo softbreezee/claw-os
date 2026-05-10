@@ -62,3 +62,12 @@ openclaw.json
 # Keep them out of git; the project ships only curated skills under skills/.
 temp_*/
 *.tar.gz
+
+# Runtime state — manager.sh and `fastclaw daemon` both produce these.
+# PID file moved to ~/.fastclaw/fastclaw.pid; legacy <repo>/fastclaw.pid
+# is also caught here so old artefacts don't sneak back in.
+fastclaw.pid
+logs/
+
+# CodeWiz / agent local plans + scratch state, not meant for VCS.
+.codewiz/

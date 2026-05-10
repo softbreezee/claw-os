@@ -7,19 +7,40 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/eventbus"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/taskrunner"
 )
 
+// maxAttachmentBytes caps a single uploaded file. 25 MiB is comfortably
+// above the typical mobile photo size (5–8 MiB) but well under the
+// inline-base64 limits of OpenAI/Anthropic (which are roughly 20 MiB
+// per image after base64 expansion). When we add a config block for
+// attachments this becomes a settable knob.
+const maxAttachmentBytes = 25 * 1024 * 1024
+
+// maxMultipartMemory bounds in-memory buffering during ParseMultipartForm.
+// Anything larger spills to /tmp; 32 MiB is a sane Go default.
+const maxMultipartMemory = 32 * 1024 * 1024
+
 // chatSubmitRequest is the wire format of POST /api/chat/submit.
+//
+// Model is optional ("" = use the agent's configured default). When set,
+// it overrides the agent's model for this single message only — the
+// agent's persistent config is unchanged. The override is read by
+// agent.effectiveModel at every primary LLM call site, so it covers
+// both the ReAct loop and the final streaming response.
 type chatSubmitRequest struct {
 	AgentID   string `json:"agentId"`
 	SessionID string `json:"sessionId"`
 	Message   string `json:"message"`
+	Model     string `json:"model,omitempty"`
 }
 
 // chatTaskWired returns true iff the async runtime is fully configured.
@@ -29,23 +50,72 @@ func (s *Server) chatTaskWired() bool {
 }
 
 // POST /api/chat/submit – enqueue a new task, return its ID.
+//
+// Accepts two content types:
+//   - application/json (legacy text-only path)
+//   - multipart/form-data (text + file attachments)
+//
+// The multipart form fields are: agentId, sessionId, message, model,
+// and one or more "files". Files are saved into the upload store
+// before being attached to the task.
 func (s *Server) handleChatSubmit(w http.ResponseWriter, r *http.Request) {
 	if !s.chatTaskWired() {
 		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{"error": "chat task subsystem not initialised"})
 		return
 	}
 
-	var req chatSubmitRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+	var (
+		req         chatSubmitRequest
+		attachments []bus.Attachment
+	)
+
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "multipart/form-data") {
+		if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid multipart form: " + err.Error()})
+			return
+		}
+		req.AgentID = r.FormValue("agentId")
+		req.SessionID = r.FormValue("sessionId")
+		req.Message = r.FormValue("message")
+		req.Model = r.FormValue("model")
+
+		// Save each uploaded file to the content-addressed store.
+		// Failures are reported as 4xx (rather than silently skipped)
+		// so the user sees what happened to their attachment.
+		if r.MultipartForm != nil {
+			files := r.MultipartForm.File["files"]
+			if len(files) > 0 {
+				atts, err := s.persistMultipartFiles(files)
+				if err != nil {
+					jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+					return
+				}
+				attachments = atts
+			}
+		}
+	} else {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+			return
+		}
+	}
+
+	// Allow message to be empty when there's at least one attachment —
+	// "[user uploaded an image without a caption]" is a valid prompt.
+	if req.AgentID == "" || req.SessionID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "agentId and sessionId required"})
 		return
 	}
-	if req.AgentID == "" || req.SessionID == "" || req.Message == "" {
-		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "agentId, sessionId, message required"})
+	if req.Message == "" && len(attachments) == 0 {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "message or attachment required"})
 		return
 	}
 
-	taskID, err := s.chatRunner.Submit(r.Context(), req.AgentID, req.SessionID, req.Message)
+	taskID, err := s.chatRunner.SubmitWithOptions(r.Context(), req.AgentID, req.SessionID, req.Message, taskrunner.SubmitOptions{
+		ModelOverride: req.Model,
+		Attachments:   attachments,
+	})
 	if err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
@@ -55,6 +125,46 @@ func (s *Server) handleChatSubmit(w http.ResponseWriter, r *http.Request) {
 		"status": string(store.ChatTaskPending),
 	})
 }
+
+// persistMultipartFiles streams each uploaded file into the upload
+// store and returns the corresponding bus.Attachment slice. Any file
+// over maxAttachmentBytes aborts the whole batch (we'd rather fail
+// loudly than partially attach).
+func (s *Server) persistMultipartFiles(headers []*multipartFileHeader) ([]bus.Attachment, error) {
+	store, err := s.uploadStore()
+	if err != nil {
+		return nil, fmt.Errorf("upload store unavailable: %w", err)
+	}
+
+	out := make([]bus.Attachment, 0, len(headers))
+	for _, fh := range headers {
+		if fh.Size > maxAttachmentBytes {
+			return nil, fmt.Errorf("attachment %q is %.1f MiB, exceeds limit of %d MiB",
+				fh.Filename, float64(fh.Size)/1024/1024, maxAttachmentBytes/1024/1024)
+		}
+		f, err := fh.Open()
+		if err != nil {
+			return nil, fmt.Errorf("open %s: %w", fh.Filename, err)
+		}
+		mime := fh.Header.Get("Content-Type")
+		path, err := store.Save(f, mime, fh.Filename)
+		f.Close()
+		if err != nil {
+			return nil, fmt.Errorf("save %s: %w", fh.Filename, err)
+		}
+		out = append(out, bus.Attachment{
+			Path:     path,
+			MimeType: mime,
+			Name:     fh.Filename,
+			Size:     fh.Size,
+		})
+	}
+	return out, nil
+}
+
+// multipartFileHeader is just an alias to keep the helper signature
+// independent of net/textproto's pointer-heavy nesting in tests.
+type multipartFileHeader = multipart.FileHeader
 
 // GET /api/chat/tasks/{id}/events?after=N – SSE subscription to a task's
 // event stream. The connection stays open until either:

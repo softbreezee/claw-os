@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/channels"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/cron"
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -151,43 +149,30 @@ func (g *Gateway) reloadConfig() {
 }
 
 // resolveProviderCfg picks the active provider config from a Config.
-func resolveProviderCfg(cfg *config.Config) config.ProviderConfig {
-	var pc config.ProviderConfig
-	defaultModel := cfg.Agents.Defaults.Model
-	if parts := strings.SplitN(defaultModel, "/", 2); len(parts) == 2 {
-		if p, ok := cfg.Providers[parts[0]]; ok {
-			return p
-		}
-	}
-	for _, key := range []string{"default", "openai", "openrouter"} {
-		if p, ok := cfg.Providers[key]; ok {
-			return p
-		}
-	}
-	for _, p := range cfg.Providers {
-		return p
-	}
-	return pc
-}
-
-// reloadProvider updates the LLM provider if API key/base/type changed.
+// reloadProvider rebuilds the provider registry whenever any provider
+// entry changes, then asks the agent manager to re-route every agent
+// to the appropriate provider based on its (possibly also reloaded)
+// model field.
+//
+// We don't try to be clever about diffing individual providers — the
+// previous "is the default provider's apiKey/apiBase the same?" check
+// missed the case where a *non-default* provider was added/removed,
+// which silently broke routing for any agent that targeted it. A full
+// rebuild is cheap (it's just constructing a few HTTP clients) and
+// always correct.
 func (g *Gateway) reloadProvider(newCfg *config.Config) {
-	newProvCfg := resolveProviderCfg(newCfg)
-
-	g.mu.RLock()
-	oldCfg := g.config
-	g.mu.RUnlock()
-
-	oldProvCfg := resolveProviderCfg(oldCfg)
-
-	if newProvCfg.APIKey != oldProvCfg.APIKey || newProvCfg.APIBase != oldProvCfg.APIBase || newProvCfg.APIType != oldProvCfg.APIType {
-		llm := provider.NewProvider(newProvCfg.APIKey, newProvCfg.APIBase, newProvCfg.APIType)
-		g.agents.UpdateProvider(llm)
-		slog.Info("hot-reload: provider updated", "apiBase", newProvCfg.APIBase, "apiType", newProvCfg.APIType)
+	newReg := buildProviderRegistry(newCfg)
+	if reg := g.agents.Registry(); reg != nil {
+		reg.Replace(newReg)
+		slog.Info("hot-reload: provider registry rebuilt", "providers", reg.Names())
 	}
 }
 
-// reloadAgents updates agent model settings from new config.
+// reloadAgents updates agent model settings from new config and then
+// re-points each agent at its (possibly newly-relevant) provider.
+//
+// Order matters: UpdateConfig must run before Rewire so Rewire sees
+// the new model field when computing which provider to use.
 func (g *Gateway) reloadAgents(newCfg *config.Config) {
 	resolved := config.ResolveAgents(newCfg)
 	for _, rc := range resolved {
@@ -199,6 +184,9 @@ func (g *Gateway) reloadAgents(newCfg *config.Config) {
 		ag.UpdateConfig(rc)
 		slog.Info("hot-reload: agent config updated", "id", rc.ID, "model", rc.Model)
 	}
+	// Re-resolve provider for every agent — model field may have moved
+	// between providers (e.g. "deepseek/x" -> "openai/y").
+	g.agents.Rewire()
 }
 
 // reloadCron updates the cron scheduler with new jobs.

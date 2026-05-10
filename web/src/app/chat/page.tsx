@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -12,7 +12,10 @@ import {
   cancelTask,
   getTask,
   deleteChatSession,
+  fileURL,
+  openWorkspace,
   type AgentInfo,
+  type ChatAttachment,
   type ChatHistoryMessage,
   type ChatStreamEvent,
 } from "@/lib/api";
@@ -32,6 +35,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
+  Paperclip,
+  X,
+  FileText,
+  FolderOpen,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -44,12 +51,22 @@ interface ToolCall {
   error?: boolean;
 }
 
+// MessageAttachment is what the chat UI renders alongside a message.
+// It's a structural superset of api.ChatAttachment plus a `name` for
+// the live-upload case (object URLs don't carry a filename).
+interface MessageAttachment {
+  type: "image" | "file";
+  url: string;
+  name?: string;
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "agent" | "tool-group";
   content: string;
   timestamp: number;
   toolCalls?: ToolCall[];
+  attachments?: MessageAttachment[];
 }
 
 interface ChatSession {
@@ -142,13 +159,28 @@ function relativeTime(ts: number): string {
   return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+// chatAttachmentsToMsg converts API-shape attachments into the slightly
+// richer in-memory shape. The current backend only emits images, but
+// the UI is type-permissive (`type: "image" | "file"`) so a future
+// backend that adds documents won't require touching this code path.
+function chatAttachmentsToMsg(atts?: ChatAttachment[]): MessageAttachment[] | undefined {
+  if (!atts || atts.length === 0) return undefined;
+  return atts.map((a) => ({ type: a.type === "image" ? "image" : "file", url: a.url }));
+}
+
 function buildChatMessages(history: ChatHistoryMessage[]): ChatMessage[] {
   const msgs: ChatMessage[] = [];
   let i = 0;
   while (i < history.length) {
     const h = history[i];
     if (h.role === "user") {
-      msgs.push({ id: `h-${i}`, role: "user", content: h.content || "", timestamp: 0 });
+      msgs.push({
+        id: `h-${i}`,
+        role: "user",
+        content: h.content || "",
+        timestamp: 0,
+        attachments: chatAttachmentsToMsg(h.attachments),
+      });
       i++;
     } else if (h.role === "assistant" && h.toolCalls && h.toolCalls.length > 0) {
       const calls: ToolCall[] = h.toolCalls.map((tc) => ({ ...tc, result: undefined }));
@@ -204,6 +236,23 @@ export default function ChatPage() {
   });
   const [input, setInput] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Pending file attachments for the next send. Cleared after a
+  // successful submit (or never set if the user only sends text).
+  // We keep object URLs alongside so previews don't have to re-encode
+  // the bytes; remember to URL.revokeObjectURL on remove and unmount
+  // to avoid leaking memory across long sessions.
+  const [pendingFiles, setPendingFiles] = useState<{
+    id: string;
+    file: File;
+    previewURL: string; // object URL for image thumbnails; "" for non-image
+  }[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Per-agent ad-hoc model override. null/"" means "use the agent's
+  // configured default". Resets on agent switch so the user always sees
+  // the agent's own default after navigating away and back.
+  const [modelOverride, setModelOverride] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -242,6 +291,13 @@ export default function ChatPage() {
       })
       .catch(() => {});
   }, []);
+
+  // Reset model override whenever the user picks a different agent.
+  // Each agent has its own configured default; the override is meant
+  // to be a per-message tweak within one agent context.
+  useEffect(() => {
+    setModelOverride("");
+  }, [selectedAgent]);
 
   const loadSessions = useCallback((agentId: string) => {
     getChatSessions(agentId)
@@ -282,6 +338,123 @@ export default function ChatPage() {
       el.style.height = Math.min(el.scrollHeight, 180) + "px";
     }
   }, [input]);
+
+  // ───────────────────────── Attachment helpers ───────────────────────────
+  //
+  // Browsers expose three independent ways to send a file: file picker,
+  // paste, and drag-and-drop. We funnel all three through addFiles() so
+  // the de-dup, size guard, and preview-URL bookkeeping live in one place.
+
+  // Upper bound mirrors the backend's maxAttachmentBytes (25 MiB). We
+  // reject early in the UI so a typo on a 1 GB file doesn't waste a
+  // round-trip.
+  const MAX_ATTACHMENT_MB = 25;
+
+  const addFiles = useCallback((files: File[]) => {
+    if (files.length === 0) return;
+    setPendingFiles((prev) => {
+      const next = [...prev];
+      for (const f of files) {
+        if (f.size > MAX_ATTACHMENT_MB * 1024 * 1024) {
+          // eslint-disable-next-line no-alert
+          alert(`"${f.name}" exceeds ${MAX_ATTACHMENT_MB} MB and was skipped.`);
+          continue;
+        }
+        // De-dup by (name, size, lastModified) — pasting the same image
+        // twice or dragging the same file twice should noop.
+        const dup = next.some(
+          (p) => p.file.name === f.name && p.file.size === f.size && p.file.lastModified === f.lastModified
+        );
+        if (dup) continue;
+        const isImage = f.type.startsWith("image/");
+        next.push({
+          id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          file: f,
+          previewURL: isImage ? URL.createObjectURL(f) : "",
+        });
+      }
+      return next;
+    });
+  }, []);
+
+  const removeAttachment = useCallback((id: string) => {
+    setPendingFiles((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target?.previewURL) URL.revokeObjectURL(target.previewURL);
+      return prev.filter((p) => p.id !== id);
+    });
+  }, []);
+
+  const clearAttachments = useCallback(() => {
+    setPendingFiles((prev) => {
+      for (const p of prev) {
+        if (p.previewURL) URL.revokeObjectURL(p.previewURL);
+      }
+      return [];
+    });
+  }, []);
+
+  // Revoke preview URLs on unmount to keep long-lived sessions tidy.
+  useEffect(() => {
+    return () => {
+      for (const p of pendingFiles) {
+        if (p.previewURL) URL.revokeObjectURL(p.previewURL);
+      }
+    };
+    // We deliberately don't list pendingFiles in deps — the cleanup
+    // above runs on unmount only. Per-item revoke happens in
+    // removeAttachment / addFiles dedup flows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.kind === "file") {
+          const f = it.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        addFiles(files);
+      }
+    },
+    [addFiles],
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      const dropped = Array.from(e.dataTransfer?.files ?? []);
+      if (dropped.length > 0) addFiles(dropped);
+    },
+    [addFiles],
+  );
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer?.types?.includes("Files")) {
+      e.preventDefault();
+      setIsDragging(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback(() => setIsDragging(false), []);
+
+  const handleFileInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files ?? []);
+      if (files.length > 0) addFiles(files);
+      // Reset so selecting the same file twice in a row still triggers onChange.
+      e.target.value = "";
+    },
+    [addFiles],
+  );
 
   // streamTaskEvents wires a task subscription into the per-tab runtime.
   // Used by both handleSend (fresh tasks) and the resume effect (tabs the
@@ -383,7 +556,11 @@ export default function ChatPage() {
 
   const handleSend = useCallback(async (text?: string) => {
     const msg = (text ?? input).trim();
-    if (!msg || !selectedAgent) return;
+    // Empty text is OK as long as at least one attachment is queued —
+    // "[user uploaded a screenshot]" is a perfectly valid prompt for a
+    // multimodal model.
+    const hasAttachments = pendingFiles.length > 0;
+    if ((!msg && !hasAttachments) || !selectedAgent) return;
     // Per-tab guard: if THIS tab is already streaming, ignore. Other tabs
     // are unaffected because each (agent, session) has its own runtime.
     const key = rtKey(selectedAgent, sessionId);
@@ -395,6 +572,23 @@ export default function ChatPage() {
     const userMsgId = `u-${Date.now()}`;
     const initialGroupId = `tg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
+    // Capture attachments at submit time (state may move on while the
+    // request is in flight). Snapshot the File objects so the upload
+    // payload is stable even if the user clears the queue mid-flight.
+    const filesToSend = pendingFiles.map((p) => p.file);
+
+    // Build the attachment list shown on the user's bubble. Object URLs
+    // are cheap to render immediately (no upload round-trip needed).
+    // We hand ownership of these URLs to the message — they outlive
+    // pendingFiles, so the cleanup that runs on remove/unmount must
+    // not touch them. We rebuild fresh URLs here so the previews persist
+    // even after the pending queue is cleared below.
+    const msgAttachments: MessageAttachment[] = pendingFiles.map((p) => ({
+      type: p.file.type.startsWith("image/") ? "image" : "file",
+      url: URL.createObjectURL(p.file),
+      name: p.file.name,
+    }));
+
     // ctrl.abort() unsubscribes the SSE stream. The actual task cancel
     // (kill subprocess on the server) is sent via cancelTask in handleStop.
     const ctrl = new AbortController();
@@ -403,14 +597,35 @@ export default function ChatPage() {
       ...r,
       sending: true,
       abort: () => ctrl.abort(),
-      messages: [...r.messages, { id: userMsgId, role: "user", content: msg, timestamp: Date.now() }],
+      messages: [
+        ...r.messages,
+        {
+          id: userMsgId,
+          role: "user",
+          content: msg,
+          timestamp: Date.now(),
+          attachments: msgAttachments.length > 0 ? msgAttachments : undefined,
+        },
+      ],
       curGroupId: initialGroupId,
       curCalls: [],
       curContent: "",
     }));
 
+    // Clear the pending queue right after we've snapshotted it. Doing
+    // it before the await keeps the UI responsive (preview chips
+    // disappear immediately, no stale state if the user starts typing
+    // a new message).
+    clearAttachments();
+
     try {
-      const { taskId } = await submitChat(agentForReq, sessionForReq, msg);
+      const { taskId } = await submitChat(
+        agentForReq,
+        sessionForReq,
+        msg,
+        modelOverride || undefined,
+        filesToSend,
+      );
       // Persist taskId BEFORE subscribing so handleStop knows what to
       // cancel and the resume effect can find this in-flight task.
       updateRuntime(key, (cur) => ({ ...cur, taskId }));
@@ -419,6 +634,7 @@ export default function ChatPage() {
     } catch (err) {
       const aborted = (err as Error)?.name === "AbortError" || ctrl.signal.aborted;
       if (!aborted) {
+        const errMsg = (err as Error)?.message || "Failed to get a response. Is the gateway running?";
         updateRuntime(key, (cur) => ({
           ...cur,
           sending: false,
@@ -426,7 +642,7 @@ export default function ChatPage() {
           taskId: undefined,
           messages: [
             ...cur.messages,
-            { id: `e-${Date.now()}`, role: "agent", content: "⚠️ Failed to get a response. Is the gateway running?", timestamp: Date.now() },
+            { id: `e-${Date.now()}`, role: "agent", content: `⚠️ ${errMsg}`, timestamp: Date.now() },
           ],
         }));
       }
@@ -435,7 +651,7 @@ export default function ChatPage() {
         textareaRef.current?.focus();
       }
     }
-  }, [input, selectedAgent, sessionId, loadSessions, updateRuntime, streamTaskEvents]);
+  }, [input, selectedAgent, sessionId, modelOverride, pendingFiles, clearAttachments, loadSessions, updateRuntime, streamTaskEvents]);
 
   const handleStop = useCallback(() => {
     const r = runtimesRef.current[currentKey];
@@ -524,6 +740,24 @@ export default function ChatPage() {
   };
 
   const currentAgent = agents.find((a) => a.id === selectedAgent);
+
+  // Models known to this gateway: union of all agents' configured models.
+  // Cheap to compute, gives the user a quick switcher between models they
+  // have already configured for some agent. Free-form input could come
+  // later; for now this covers the "I have flash AND pro configured, let
+  // me pick per message" case.
+  const availableModels = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of agents) {
+      if (a.model) set.add(a.model);
+    }
+    return Array.from(set).sort();
+  }, [agents]);
+
+  // What's actually going to be used on the next send. Exposed in the UI
+  // as a label so a user who picked a non-default model in a previous turn
+  // doesn't accidentally send with the wrong model after navigating away.
+  const effectiveModel = modelOverride || currentAgent?.model || "";
 
   return (
     <div className="flex h-[calc(100vh-3rem)] md:h-screen bg-background">
@@ -634,6 +868,34 @@ export default function ChatPage() {
                 {agents.map((a) => <option key={a.id} value={a.id}>{a.id}</option>)}
               </select>
             )}
+            {/* Open the agent's workspace directory in the host file
+                explorer. Shows briefly to confirm the request was
+                received — actual GUI launch happens server-side. */}
+            <button
+              onClick={async () => {
+                if (!selectedAgent) return;
+                try {
+                  const r = await openWorkspace(selectedAgent);
+                  if (!r.ok) {
+                    // eslint-disable-next-line no-alert
+                    alert(`Failed to open: ${r.error || "unknown error"}`);
+                  }
+                } catch {
+                  // eslint-disable-next-line no-alert
+                  alert("Failed to open workspace");
+                }
+              }}
+              disabled={!selectedAgent}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title={
+                currentAgent?.workspace
+                  ? `Open workspace folder\n${currentAgent.workspace}`
+                  : "Open workspace folder"
+              }
+            >
+              <FolderOpen className="h-4 w-4" />
+            </button>
+
             <button
               onClick={handleNewChat}
               className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
@@ -660,6 +922,7 @@ export default function ChatPage() {
                   msg={msg}
                   copiedId={copiedId}
                   onCopy={handleCopy}
+                  agentId={selectedAgent}
                 />
               )
             )}
@@ -686,25 +949,142 @@ export default function ChatPage() {
         </div>
 
         {/* Input */}
-        <div className="shrink-0 px-4 pb-5 pt-3 border-t border-border bg-card/20">
+        <div
+          className="shrink-0 px-4 pb-5 pt-3 border-t border-border bg-card/20"
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
           <div className="mx-auto max-w-3xl">
-            <div className="flex flex-col rounded-xl border border-border bg-card shadow-sm focus-within:border-primary/40 focus-within:shadow-md transition-all">
+            <div
+              className={`flex flex-col rounded-xl border bg-card shadow-sm focus-within:border-primary/40 focus-within:shadow-md transition-all ${
+                isDragging ? "border-primary border-dashed bg-primary/5" : "border-border"
+              }`}
+            >
+              {/* Hidden file input — triggered by the paperclip button.
+                  Accept any file but the agent loop currently only inlines
+                  images; non-images get a textual breadcrumb so the model
+                  knows they were sent. */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={handleFileInputChange}
+                className="hidden"
+              />
+
+              {/* Attachment preview strip — only rendered when files are
+                  queued. Sits above the textarea so it doesn't fight for
+                  vertical space when empty. */}
+              {pendingFiles.length > 0 && (
+                <div className="flex flex-wrap gap-2 px-3 pt-3">
+                  {pendingFiles.map((p) => {
+                    const isImage = p.file.type.startsWith("image/");
+                    return (
+                      <div
+                        key={p.id}
+                        className="group relative flex items-center gap-2 rounded-lg border border-border bg-muted/40 pl-2 pr-7 py-1.5"
+                      >
+                        {isImage && p.previewURL ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={p.previewURL}
+                            alt={p.file.name}
+                            className="h-8 w-8 rounded object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-8 w-8 items-center justify-center rounded bg-background/50">
+                            <FileText className="h-4 w-4 text-muted-foreground" />
+                          </div>
+                        )}
+                        <div className="min-w-0 max-w-[140px]">
+                          <p className="truncate text-[11px] font-medium leading-tight">
+                            {p.file.name}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground/60 leading-tight">
+                            {(p.file.size / 1024).toFixed(0)} KB
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeAttachment(p.id)}
+                          className="absolute right-1 top-1 rounded p-0.5 text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive transition-colors"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               <textarea
                 ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
                 placeholder={selectedAgent ? `Message ${selectedAgent}…` : "Select an agent first"}
                 disabled={!selectedAgent}
                 rows={1}
                 className="w-full resize-none bg-transparent px-4 pt-3 pb-2 text-[14px] leading-relaxed placeholder:text-muted-foreground/40 outline-none disabled:opacity-40"
                 style={{ maxHeight: 180, minHeight: 42 }}
               />
-              <div className="flex items-center justify-between px-3 pb-2.5">
-                <p className="text-[11px] text-muted-foreground/40 select-none">
-                  {sending ? "Responding…" : "↵ Send  ·  ⇧↵ New line"}
-                </p>
+              <div className="flex items-center justify-between px-3 pb-2.5 gap-2">
+                {/*
+                  Per-message model picker. Disabled while sending so the
+                  user can't change models mid-stream (the in-flight task
+                  is already bound to whatever was picked at submit time).
+                  Defaults to the agent's configured model and resets on
+                  agent switch (see useEffect on selectedAgent).
+                */}
+                <div className="flex items-center gap-2 min-w-0">
+                  {availableModels.length > 0 && (
+                    <select
+                      value={effectiveModel}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setModelOverride(next === currentAgent?.model ? "" : next);
+                      }}
+                      disabled={sending || !selectedAgent}
+                      title={
+                        modelOverride
+                          ? `Override active for this message (default: ${currentAgent?.model})`
+                          : "Pick a model for this message"
+                      }
+                      className={`max-w-[180px] truncate rounded-md border bg-card px-1.5 py-0.5 text-[11px] font-mono outline-none transition-colors ${
+                        modelOverride
+                          ? "border-primary/40 text-primary"
+                          : "border-border text-muted-foreground/70 hover:text-foreground"
+                      } disabled:opacity-40`}
+                    >
+                      {availableModels.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  )}
+                  <p className="text-[11px] text-muted-foreground/40 select-none truncate">
+                    {sending ? "Responding…" : "↵ Send  ·  ⇧↵ New line"}
+                  </p>
+                </div>
                 <div className="flex items-center gap-2">
+                  {/* Paperclip — opens the file picker. Hidden during
+                      sending to avoid the user mutating the queue while
+                      a request is mid-flight (the in-flight task already
+                      owns its own file snapshot, so changes wouldn't
+                      affect the current turn anyway). */}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={sending || !selectedAgent}
+                    title="Attach images (also: paste / drag-and-drop)"
+                    className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/70 hover:text-foreground hover:bg-muted/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Paperclip className="h-3.5 w-3.5" />
+                  </button>
+
                   {sending ? (
                     <Button
                       onClick={handleStop}
@@ -718,7 +1098,9 @@ export default function ChatPage() {
                   ) : (
                     <Button
                       onClick={() => handleSend()}
-                      disabled={!input.trim() || !selectedAgent}
+                      // Allow sending with attachments only (no text) —
+                      // a screenshot with no caption is a real use case.
+                      disabled={(!input.trim() && pendingFiles.length === 0) || !selectedAgent}
                       size="sm"
                       className="h-7 gap-1.5 text-xs"
                     >
@@ -768,16 +1150,37 @@ function EmptyState({ agentName, onPrompt }: { agentName: string; onPrompt: (p: 
 
 // ── Message bubble ───────────────────────────────────────────────────────────
 
+// rewriteMarkdownImageSrc resolves relative image paths in agent
+// markdown output to a /api/files URL so the workspace-resident image
+// the agent just generated actually loads in the browser. Absolute
+// http(s):// and data: URLs are left untouched.
+//
+// We accept any relative form ("foo.png", "./foo.png", "subdir/foo.png")
+// — they're all rooted at the agent workspace anyway, and the backend
+// runs filepath.Clean before serving, so trailing dots can't escape.
+function rewriteMarkdownImageSrc(src: string | undefined, agentId: string): string {
+  if (!src) return "";
+  if (/^(https?:|data:|blob:|\/api\/)/i.test(src)) return src;
+  // Strip any leading "./" — looks ugly in the URL otherwise.
+  const cleaned = src.replace(/^\.\//, "");
+  return fileURL({ kind: "workspace", path: cleaned, agentId });
+}
+
 function MessageBubble({
   msg,
   copiedId,
   onCopy,
+  agentId,
 }: {
   msg: ChatMessage;
   copiedId: string | null;
   onCopy: (m: ChatMessage) => void;
+  agentId: string;
 }) {
   const isUser = msg.role === "user";
+  const attachments = msg.attachments ?? [];
+  const hasAttachments = attachments.length > 0;
+  const [lightboxURL, setLightboxURL] = useState<string | null>(null);
 
   return (
     <div className={`flex gap-2 py-0.5 ${isUser ? "justify-end" : "justify-start"}`}>
@@ -788,17 +1191,68 @@ function MessageBubble({
       )}
 
       <div className={`group max-w-[78%] ${isUser ? "order-first" : ""}`}>
-        <div
-          className={`rounded-2xl px-4 py-2.5 ${
-            isUser
-              ? "bg-primary text-primary-foreground rounded-br-sm"
-              : "bg-muted rounded-bl-sm"
-          }`}
-        >
-          <div className="text-[14px] leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-pre:my-2 prose-ul:my-1 prose-ol:my-1 prose-code:text-[12px]">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+        {/* Attachments strip — sits above the bubble for user messages
+            so the layout reads as "what I sent: image + text". When
+            there's no text we still render the strip alone. */}
+        {hasAttachments && (
+          <div className={`mb-1.5 flex flex-wrap gap-1.5 ${isUser ? "justify-end" : "justify-start"}`}>
+            {attachments.map((att, idx) => (
+              <AttachmentTile
+                key={idx}
+                att={att}
+                onPreview={(url) => setLightboxURL(url)}
+              />
+            ))}
           </div>
-        </div>
+        )}
+
+        {/* Bubble itself only renders when there's text content; an
+            image-only message looks cleaner without an empty box. */}
+        {msg.content && (
+          <div
+            className={`rounded-2xl px-4 py-2.5 ${
+              isUser
+                ? "bg-primary text-primary-foreground rounded-br-sm"
+                : "bg-muted rounded-bl-sm"
+            }`}
+          >
+            {/*
+              User bubbles always need `prose-invert` (light text on the dark
+              primary background). The agent bubble uses `bg-muted`, which is
+              light in the light theme and dark in the dark theme — so it only
+              wants invert under `dark:`.
+            */}
+            <div
+              className={`text-[14px] leading-relaxed prose prose-sm max-w-none prose-p:my-1 prose-pre:my-2 prose-ul:my-1 prose-ol:my-1 prose-code:text-[12px] ${
+                isUser ? "prose-invert" : "dark:prose-invert"
+              }`}
+            >
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  // Resolve `![](file.png)` from the agent — the file
+                  // typically lives in the agent's workspace, served
+                  // through /api/files. Click to open lightbox.
+                  img: ({ src, alt }) => {
+                    const resolved = rewriteMarkdownImageSrc(typeof src === "string" ? src : undefined, agentId);
+                    if (!resolved) return null;
+                    return (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={resolved}
+                        alt={alt || ""}
+                        className="max-w-full max-h-80 rounded-md border border-border/50 cursor-zoom-in my-1"
+                        onClick={() => setLightboxURL(resolved)}
+                      />
+                    );
+                  },
+                }}
+              >
+                {msg.content}
+              </ReactMarkdown>
+            </div>
+          </div>
+        )}
 
         <div className={`flex items-center gap-1.5 mt-1 ${isUser ? "justify-end" : "justify-start"}`}>
           {msg.timestamp > 0 && (
@@ -806,7 +1260,7 @@ function MessageBubble({
               {relativeTime(msg.timestamp)}
             </span>
           )}
-          {!isUser && (
+          {!isUser && msg.content && (
             <button
               onClick={() => onCopy(msg)}
               className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted/80 text-muted-foreground/50 hover:text-muted-foreground transition-all"
@@ -821,6 +1275,59 @@ function MessageBubble({
           )}
         </div>
       </div>
+
+      {/* Lightbox — full-screen preview when an attachment is clicked.
+          Click anywhere to dismiss; Esc handled implicitly via the
+          backdrop button being focusable. */}
+      {lightboxURL && (
+        <div
+          onClick={() => setLightboxURL(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6 cursor-zoom-out"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightboxURL}
+            alt=""
+            className="max-h-full max-w-full rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// AttachmentTile renders a single attachment chip. Images get a
+// thumbnail; non-images get a labelled file icon. Clicking an image
+// pops the lightbox via the onPreview callback.
+function AttachmentTile({
+  att,
+  onPreview,
+}: {
+  att: MessageAttachment;
+  onPreview: (url: string) => void;
+}) {
+  if (att.type === "image") {
+    return (
+      <button
+        type="button"
+        onClick={() => onPreview(att.url)}
+        className="block overflow-hidden rounded-lg border border-border/50 hover:border-primary/40 transition-colors cursor-zoom-in"
+        title={att.name || "View image"}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={att.url}
+          alt={att.name || ""}
+          className="block max-h-56 max-w-[280px] object-contain bg-background/40"
+        />
+      </button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+      <FileText className="h-4 w-4 text-muted-foreground" />
+      <span className="text-xs text-muted-foreground">{att.name || "file"}</span>
     </div>
   );
 }

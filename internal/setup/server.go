@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
@@ -17,7 +19,31 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/taskqueue"
 	"github.com/fastclaw-ai/fastclaw/internal/taskrunner"
+	"github.com/fastclaw-ai/fastclaw/internal/upload"
 )
+
+// uploadStore returns the lazily-initialised attachment store rooted
+// at ~/.fastclaw/uploads. We don't fail server startup on init errors
+// because the rest of the API (chat, status, agents…) should keep
+// working even when the upload dir is somehow unavailable; only the
+// chat-with-attachments path will then return an error.
+func (s *Server) uploadStore() (*upload.Store, error) {
+	s.uploadMu.Lock()
+	defer s.uploadMu.Unlock()
+	if s.uploads != nil {
+		return s.uploads, nil
+	}
+	homeDir, err := config.HomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("upload store: %w", err)
+	}
+	st, err := upload.NewStore(filepath.Join(homeDir, "uploads"))
+	if err != nil {
+		return nil, err
+	}
+	s.uploads = st
+	return st, nil
+}
 
 // AgentHandle is a minimal interface for interacting with an agent from the web UI.
 type AgentHandle interface {
@@ -27,6 +53,12 @@ type AgentHandle interface {
 	WebChatHistory(sessionId string) []map[string]any
 	WebChatSessions() []map[string]string
 	DeleteWebSession(sessionId string) error
+	// WorkspacePath returns the on-disk directory the agent uses for
+	// scratch files, generated artifacts, and the SOUL.md / MEMORY.md
+	// markdown files. Used by the file-serving endpoints so the chat
+	// UI can render images the agent produced and so the user can pop
+	// it open in their OS file explorer.
+	WorkspacePath() string
 }
 
 // AgentProvider gives the server access to the running agents.
@@ -53,6 +85,12 @@ type Server struct {
 	eventBus   eventbus.Bus
 	taskStore  store.Store
 	tenantID   string
+
+	// Upload store for chat attachments. Lazy-initialised in
+	// uploadStore() rather than wired through every constructor —
+	// keeps the change to existing call sites minimal.
+	uploadMu sync.Mutex
+	uploads  *upload.Store
 }
 
 // NewServer creates a setup wizard server on the given port.
@@ -118,6 +156,10 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/chat/history", s.handleChatHistory)
 	mux.HandleFunc("GET /api/chat/sessions", s.handleChatSessions)
 	mux.HandleFunc("DELETE /api/chat/sessions", s.handleDeleteChatSession)
+
+	// File serving (chat attachments preview + agent-generated artifacts)
+	mux.HandleFunc("GET /api/files", s.handleServeFile)
+	mux.HandleFunc("POST /api/workspace/open", s.handleOpenWorkspace)
 
 	// Agent management
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)

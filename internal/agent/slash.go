@@ -329,6 +329,11 @@ func (a *Agent) slashPersonalitySet(msg bus.InboundMessage, name string) slashRe
 func (a *Agent) slashModel(msg bus.InboundMessage, model string) slashResult {
 	old := a.model
 	a.model = model
+	// Reflect the new model in the system prompt identity so the agent
+	// can correctly answer "what model are you using?" right after switching.
+	if a.ctxBuilder != nil {
+		a.ctxBuilder.SetModel(model)
+	}
 	return slashResult{handled: true, reply: fmt.Sprintf("🤖 Model switched: `%s` → `%s`", old, model)}
 }
 

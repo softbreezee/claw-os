@@ -46,12 +46,37 @@ type apiMessage struct {
 }
 
 type chatRequest struct {
-	Model       string       `json:"model"`
-	Messages    []apiMessage `json:"messages"`
-	Tools       []Tool       `json:"tools,omitempty"`
-	MaxTokens   int          `json:"max_tokens,omitempty"`
-	Temperature float64      `json:"temperature,omitempty"`
-	Stream      bool         `json:"stream"`
+	Model    string       `json:"model"`
+	Messages []apiMessage `json:"messages"`
+	Tools    []Tool       `json:"tools,omitempty"`
+	MaxTokens int         `json:"max_tokens,omitempty"`
+	// Temperature is a pointer so we can distinguish "use default" (nil,
+	// field omitted from JSON) from "explicitly send 0.0". Some upstreams
+	// — Kimi-k2, OpenAI reasoning models (o1/o3), GPT-5 family — reject
+	// any temperature other than 1 with a hard 400, so we have to be
+	// able to omit the field entirely.
+	Temperature *float64 `json:"temperature,omitempty"`
+	Stream      bool     `json:"stream"`
+}
+
+// modelLocksTemperature reports whether the named model rejects all
+// temperature values except its mandated default (usually 1.0). For
+// these models we omit the temperature field on the wire.
+//
+// The list is conservative — we'd rather a request succeed with the
+// model's default than fail with a confusing 400. New entries should
+// be added when a user reports the symptom.
+func modelLocksTemperature(model string) bool {
+	m := strings.ToLower(model)
+	switch {
+	case strings.HasPrefix(m, "kimi-k2"):
+		return true
+	case strings.HasPrefix(m, "o1"), strings.HasPrefix(m, "o3"), strings.HasPrefix(m, "o4"):
+		return true
+	case strings.HasPrefix(m, "gpt-5"):
+		return true
+	}
+	return false
 }
 
 // toAPIMessages converts provider Messages to wire-format apiMessages,
@@ -102,13 +127,23 @@ type sseResponse struct {
 	Choices []sseChoice `json:"choices"`
 }
 
-func (p *OpenAIProvider) buildRequest(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64, stream bool) (*http.Request, error) {
+// buildRequest constructs the HTTP request for /chat/completions.
+//
+// `omitTemperature` lets callers request a retry that strips the field
+// when a previous attempt failed with the model's "temperature must be
+// 1" 400. Normal callers pass false and rely on modelLocksTemperature
+// to do the right thing automatically.
+func (p *OpenAIProvider) buildRequest(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64, stream bool, omitTemperature bool) (*http.Request, error) {
+	bareModel := StripProviderPrefix(model)
 	req := chatRequest{
-		Model:       StripProviderPrefix(model),
-		Messages:    toAPIMessages(messages),
-		MaxTokens:   maxTokens,
-		Temperature: temperature,
-		Stream:      stream,
+		Model:     bareModel,
+		Messages:  toAPIMessages(messages),
+		MaxTokens: maxTokens,
+		Stream:    stream,
+	}
+	if !omitTemperature && !modelLocksTemperature(bareModel) {
+		t := temperature
+		req.Temperature = &t
 	}
 	if len(tools) > 0 {
 		req.Tools = tools
@@ -120,7 +155,11 @@ func (p *OpenAIProvider) buildRequest(ctx context.Context, messages []Message, t
 	}
 
 	url := p.apiBase + "/chat/completions"
-	slog.Info("openai request", "url", url, "model", req.Model)
+	slog.Info("openai request",
+		"url", url,
+		"model", req.Model,
+		"temperature_sent", req.Temperature != nil,
+	)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -130,42 +169,115 @@ func (p *OpenAIProvider) buildRequest(ctx context.Context, messages []Message, t
 	return httpReq, nil
 }
 
+// isTemperatureLockError sniffs an upstream 400 body to detect the
+// "this model only accepts a fixed temperature" rejection. Used to
+// retry without the offending field, which both fixes the request
+// and tells us we should add this model to modelLocksTemperature.
+func isTemperatureLockError(body string) bool {
+	b := strings.ToLower(body)
+	return strings.Contains(b, "temperature") &&
+		(strings.Contains(b, "only 1 is allowed") ||
+			strings.Contains(b, "must be 1") ||
+			strings.Contains(b, "does not support") ||
+			strings.Contains(b, "not supported"))
+}
+
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64) (*Response, error) {
-	httpReq, err := p.buildRequest(ctx, messages, tools, model, maxTokens, temperature, true)
+	resp, body, err := p.doChat(ctx, messages, tools, model, maxTokens, temperature, true, false)
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode != http.StatusOK {
+		// Self-healing retry: if upstream said "this model only takes
+		// temperature=1", drop the field and try once more. We log it
+		// loudly so the bare-model name can be added to the static
+		// lock list and avoid the wasted round-trip next time.
+		if resp.StatusCode == http.StatusBadRequest && isTemperatureLockError(body) {
+			slog.Warn("upstream rejected temperature, retrying without it",
+				"model", StripProviderPrefix(model),
+				"hint", "consider adding this model prefix to modelLocksTemperature",
+			)
+			resp.Body.Close()
+			resp2, body2, err2 := p.doChat(ctx, messages, tools, model, maxTokens, temperature, true, true)
+			if err2 != nil {
+				return nil, err2
+			}
+			defer resp2.Body.Close()
+			if resp2.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("API error %d: %s", resp2.StatusCode, body2)
+			}
+			return p.parseSSE(resp2.Body)
+		}
+		resp.Body.Close()
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, body)
+	}
+	defer resp.Body.Close()
+	return p.parseSSE(resp.Body)
+}
 
+// doChat is a thin helper that issues the request and reads the body
+// when the status isn't 200 (so callers can inspect it for retry
+// decisions). On a 200 the body is left to the caller (parseSSE
+// consumes it as a stream).
+func (p *OpenAIProvider) doChat(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64, stream, omitTemperature bool) (*http.Response, string, error) {
+	httpReq, err := p.buildRequest(ctx, messages, tools, model, maxTokens, temperature, stream, omitTemperature)
+	if err != nil {
+		return nil, "", err
+	}
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, "", fmt.Errorf("send request: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return resp, string(respBody), nil
+	}
+	return resp, "", nil
+}
+
+// openStream is the streaming counterpart to doChat. It returns the
+// raw response so the caller can either drain the body (on error) or
+// hand it off to the SSE consumer (on success).
+func (p *OpenAIProvider) openStream(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64, omitTemperature bool) (*http.Response, error) {
+	httpReq, err := p.buildRequest(ctx, messages, tools, model, maxTokens, temperature, true, omitTemperature)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return p.parseSSE(resp.Body)
+	return resp, nil
 }
 
 // ChatStream returns a StreamReader that yields chunks as they arrive from the LLM.
 func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64) (*StreamReader, error) {
-	httpReq, err := p.buildRequest(ctx, messages, tools, model, maxTokens, temperature, true)
+	resp, err := p.openStream(ctx, messages, tools, model, maxTokens, temperature, false)
 	if err != nil {
 		return nil, err
 	}
-
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
+		resp.Body.Close()
+		body := string(respBody)
+		// Same self-healing as the non-streaming path.
+		if resp.StatusCode == http.StatusBadRequest && isTemperatureLockError(body) {
+			slog.Warn("upstream rejected temperature on stream, retrying without it",
+				"model", StripProviderPrefix(model),
+			)
+			resp2, err2 := p.openStream(ctx, messages, tools, model, maxTokens, temperature, true)
+			if err2 != nil {
+				return nil, err2
+			}
+			if resp2.StatusCode != http.StatusOK {
+				body2, _ := io.ReadAll(resp2.Body)
+				resp2.Body.Close()
+				return nil, fmt.Errorf("API error %d: %s", resp2.StatusCode, string(body2))
+			}
+			resp = resp2
+		} else {
+			return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, body)
+		}
 	}
 
 	ch := make(chan StreamChunk, 64)

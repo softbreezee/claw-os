@@ -2,6 +2,7 @@ package agent
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
@@ -12,12 +13,21 @@ import (
 type Manager struct {
 	agents       map[string]*Agent
 	defaultAgent *Agent
+	registry     *provider.Registry // shared across all agents; used for routing
 }
 
 // NewManager creates agents from resolved configs.
-func NewManager(resolved []config.ResolvedAgent, prov provider.Provider, mb *bus.MessageBus) (*Manager, error) {
+//
+// The provider Registry is the source of truth for routing: each
+// agent picks its provider by looking up the prefix of its model
+// (e.g. "openai/kimi-k2.6" -> registry["openai"]). This means a
+// single fastclaw instance can mix multiple LLM backends without
+// the awkward "every agent shares the same provider" hack the older
+// signature forced.
+func NewManager(resolved []config.ResolvedAgent, registry *provider.Registry, mb *bus.MessageBus) (*Manager, error) {
 	m := &Manager{
-		agents: make(map[string]*Agent),
+		agents:   make(map[string]*Agent),
+		registry: registry,
 	}
 
 	homeDir, err := config.HomeDir()
@@ -26,12 +36,14 @@ func NewManager(resolved []config.ResolvedAgent, prov provider.Provider, mb *bus
 	}
 
 	for _, rc := range resolved {
+		prov := registry.For(rc.Model)
 		ag := NewAgent(rc, prov, mb, homeDir)
 		m.agents[rc.ID] = ag
 
 		slog.Info("loaded agent",
 			"id", rc.ID,
 			"model", rc.Model,
+			"provider", providerNameForModel(rc.Model, registry),
 			"workspace", rc.Workspace,
 		)
 	}
@@ -44,6 +56,19 @@ func NewManager(resolved []config.ResolvedAgent, prov provider.Provider, mb *bus
 	}
 
 	return m, nil
+}
+
+// providerNameForModel returns the registered provider name that would
+// be selected for the given model, or "default" if no prefix matches.
+// Pure diagnostic helper — does not mutate state.
+func providerNameForModel(model string, registry *provider.Registry) string {
+	if idx := strings.Index(model, "/"); idx > 0 {
+		name := model[:idx]
+		if registry.Has(name) {
+			return name
+		}
+	}
+	return "(default)"
 }
 
 // AgentByID returns an agent by its ID.
@@ -75,8 +100,44 @@ func (m *Manager) Names() []string {
 }
 
 // UpdateProvider replaces the LLM provider for all agents (hot-reload).
+//
+// Deprecated: prefer Rewire, which respects per-agent model→provider
+// routing. UpdateProvider is kept for callers that genuinely want
+// every agent to point at a single provider (none in tree).
 func (m *Manager) UpdateProvider(prov provider.Provider) {
 	for _, ag := range m.agents {
 		ag.setProvider(prov)
 	}
+}
+
+// Rewire re-resolves each agent's provider from the registry. Use
+// this on hot-reload after the registry has been refreshed: an agent
+// whose model changed from "deepseek/x" to "openai/y" will then start
+// hitting the right upstream API.
+//
+// Agents whose model resolves to nil keep their existing provider —
+// better to log "stale provider" than to crash on a nil pointer mid-
+// conversation.
+func (m *Manager) Rewire() {
+	if m.registry == nil {
+		return
+	}
+	for _, ag := range m.agents {
+		prov := m.registry.For(ag.Model())
+		if prov == nil {
+			slog.Warn("rewire: no provider matched agent model, keeping previous",
+				"agent", ag.Name(),
+				"model", ag.Model(),
+				"available", m.registry.Names(),
+			)
+			continue
+		}
+		ag.setProvider(prov)
+	}
+}
+
+// Registry exposes the routing registry so callers (gateway, tests)
+// can inspect available providers.
+func (m *Manager) Registry() *provider.Registry {
+	return m.registry
 }

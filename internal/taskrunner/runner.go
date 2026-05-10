@@ -30,6 +30,9 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	// busmsg alias avoids shadowing in `func New(.. bus eventbus.Bus ..)`
+	// where `bus` is a parameter name, not the package.
+	busmsg "github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/eventbus"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 )
@@ -63,6 +66,19 @@ type Runner struct {
 	queues   map[string]*sessionQueue // sessionKey(agentID:sessionID) -> queue
 	inflight map[string]*runningTask  // taskID -> currently executing task
 	seq      uint64
+
+	// pendingModels caches per-task model overrides between Submit and run.
+	// We don't persist this on ChatTaskRecord — chat tasks aren't resumed
+	// across process restarts, so an in-memory map is enough and keeps the
+	// store schema unchanged.
+	pendingModels map[string]string // taskID -> model
+
+	// pendingAttachments is the same idea as pendingModels: per-task
+	// per-process state that doesn't need to outlive a restart. The
+	// attachment files themselves live in internal/upload's directory
+	// and survive restarts; this map is just the (taskID -> file paths)
+	// binding that the runner pops on its way to executing the agent.
+	pendingAttachments map[string][]busmsg.Attachment
 
 	// PR3: per-task ring buffer of recent events, keyed by taskID. Used
 	// by handlers to replay events to clients that missed them (e.g.
@@ -110,17 +126,19 @@ func New(s store.Store, bus eventbus.Bus, resolver AgentResolver, opts Options) 
 	}
 	rootCtx, cancel := context.WithCancel(context.Background())
 	return &Runner{
-		store:       s,
-		bus:         bus,
-		resolver:    resolver,
-		tenantID:    opts.TenantID,
-		timeout:     opts.Timeout,
-		queues:      make(map[string]*sessionQueue),
-		inflight:    make(map[string]*runningTask),
-		history:     make(map[string]*eventHistory),
-		historySize: 256, // ~256 events covers a full agent turn comfortably
-		rootCtx:     rootCtx,
-		rootCancel:  cancel,
+		store:              s,
+		bus:                bus,
+		resolver:           resolver,
+		tenantID:           opts.TenantID,
+		timeout:            opts.Timeout,
+		queues:             make(map[string]*sessionQueue),
+		inflight:           make(map[string]*runningTask),
+		pendingModels:      make(map[string]string),
+		pendingAttachments: make(map[string][]busmsg.Attachment),
+		history:            make(map[string]*eventHistory),
+		historySize:        256, // ~256 events covers a full agent turn comfortably
+		rootCtx:            rootCtx,
+		rootCancel:         cancel,
 	}
 }
 
@@ -197,7 +215,31 @@ func TopicFor(taskID string) string {
 // agentID and sessionID identify the agent and session; message is the
 // user's input. The returned taskID can be used to subscribe via
 // eventbus, query state via store, or cancel via Cancel.
-func (r *Runner) Submit(ctx context.Context, agentID, sessionID, message string) (string, error) {
+// Submit enqueues a new chat task and returns its ID. The task is
+// processed asynchronously – Submit never blocks waiting for the agent.
+//
+// modelOverride is optional ("" = use the agent's configured default).
+// When non-empty, the override is attached to the task ctx and read by
+// agent.effectiveModel at every primary LLM call site, so the user can
+// pick a different model per message without editing the agent.
+// SubmitOptions carries optional knobs for Submit. Required scalars
+// (agentID, sessionID, message) stay positional for callers that don't
+// need the extras; this struct is only used when something beyond the
+// vanilla text-only path is in play.
+type SubmitOptions struct {
+	ModelOverride string
+	Attachments   []busmsg.Attachment
+}
+
+func (r *Runner) Submit(ctx context.Context, agentID, sessionID, message, modelOverride string) (string, error) {
+	return r.SubmitWithOptions(ctx, agentID, sessionID, message, SubmitOptions{ModelOverride: modelOverride})
+}
+
+// SubmitWithOptions is the explicit form of Submit. Use it whenever
+// you need to attach files (or any other future per-task knob) — the
+// shorter Submit stays for backward compatibility with existing tests
+// and call sites.
+func (r *Runner) SubmitWithOptions(ctx context.Context, agentID, sessionID, message string, opts SubmitOptions) (string, error) {
 	if r.resolver.AgentByID(agentID) == nil {
 		return "", fmt.Errorf("unknown agent: %s", agentID)
 	}
@@ -205,6 +247,12 @@ func (r *Runner) Submit(ctx context.Context, agentID, sessionID, message string)
 	r.mu.Lock()
 	r.seq++
 	taskID := fmt.Sprintf("ct-%d-%d", time.Now().UnixMilli(), r.seq)
+	if opts.ModelOverride != "" {
+		r.pendingModels[taskID] = opts.ModelOverride
+	}
+	if len(opts.Attachments) > 0 {
+		r.pendingAttachments[taskID] = opts.Attachments
+	}
 	r.mu.Unlock()
 
 	now := time.Now().UTC()
@@ -257,9 +305,14 @@ func (r *Runner) Cancel(ctx context.Context, taskID string) error {
 		slog.Warn("taskrunner: persist cancel failed", "task", taskID, "err", err)
 	}
 
-	// Cancel in-flight context if any.
+	// Cancel in-flight context if any. Also drop any pending model
+	// override / attachments — if the task was cancelled before run()
+	// consumed them, the entries would otherwise sit in the maps until
+	// process exit.
 	r.mu.Lock()
 	rt, running := r.inflight[taskID]
+	delete(r.pendingModels, taskID)
+	delete(r.pendingAttachments, taskID)
 	r.mu.Unlock()
 	if running && rt.cancel != nil {
 		rt.cancel()
@@ -305,8 +358,20 @@ func (r *Runner) run(rec *store.ChatTaskRecord) {
 	taskCtx, taskCancel := context.WithTimeout(ctx0, r.timeout)
 	defer taskCancel()
 
+	// Pop and apply the per-task model override (set by Submit). Done
+	// here rather than at enqueue time so a CancelBeforeRun task doesn't
+	// leak into the map. effectiveModel inside agent.HandleMessage will
+	// pick this up via ContextWithModel.
 	r.mu.Lock()
 	r.inflight[rec.ID] = &runningTask{cancel: taskCancel}
+	if model, ok := r.pendingModels[rec.ID]; ok {
+		taskCtx = agent.ContextWithModel(taskCtx, model)
+		delete(r.pendingModels, rec.ID)
+	}
+	if atts, ok := r.pendingAttachments[rec.ID]; ok {
+		taskCtx = agent.ContextWithAttachments(taskCtx, atts)
+		delete(r.pendingAttachments, rec.ID)
+	}
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()

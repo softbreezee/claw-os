@@ -33,6 +33,7 @@ type ContextBuilder struct {
 	skillsSummary string
 	groupCtx      *GroupContext
 	thinking      string // off, low, medium, high, adaptive
+	model         string // current LLM model name (e.g. "gpt-4o-mini", "claude-sonnet-4-5")
 }
 
 // NewContextBuilder creates a new context builder.
@@ -44,14 +45,28 @@ func NewContextBuilder(workspace string, memory *Memory, skillsSummary string) *
 	}
 }
 
+// SetModel updates the model name surfaced in the identity section.
+// Called on construction and again whenever the model is hot-swapped
+// (e.g. via /model slash command or UpdateConfig).
+func (cb *ContextBuilder) SetModel(model string) {
+	cb.model = model
+}
+
 // BuildSystemPrompt assembles the system prompt from identity, bootstrap files, memory, and skills.
 func (cb *ContextBuilder) BuildSystemPrompt() string {
 	var parts []string
 
 	// 1. Identity (runtime environment info)
+	//    Include the underlying LLM model so the agent can answer
+	//    "what model are you running on?" without having to guess.
+	modelLine := cb.model
+	if modelLine == "" {
+		modelLine = "(unknown)"
+	}
 	identity := fmt.Sprintf(`You are FastClaw, a lightweight AI Agent.
+Model: %s
 OS: %s/%s
-Working Directory: %s`, runtime.GOOS, runtime.GOARCH, cb.workspace)
+Working Directory: %s`, modelLine, runtime.GOOS, runtime.GOARCH, cb.workspace)
 	parts = append(parts, identity)
 
 	// 2. Bootstrap files

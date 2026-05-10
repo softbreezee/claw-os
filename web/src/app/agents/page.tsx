@@ -35,26 +35,52 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Bot, Plus, Pencil, Trash2, FolderOpen, Check } from "lucide-react";
-import { getAgents, createAgent, updateAgent, deleteAgent, restartDaemon, waitForGateway, type AgentDetail } from "@/lib/api";
+import { getAgents, getConfig, createAgent, updateAgent, deleteAgent, restartDaemon, waitForGateway, type AgentDetail } from "@/lib/api";
 
-const SUGGESTED_MODELS = [
-  { group: "DeepSeek", models: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"] },
-  { group: "OpenAI", models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"] },
-  { group: "Anthropic", models: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"] },
-  { group: "Open Source", models: ["llama-3.1-70b", "qwen-2.5-72b"] },
-];
+interface ModelGroup {
+  group: string;
+  models: string[];
+}
 
-/** Combobox: input box + dropdown suggestions, allows any custom value. */
-function ModelCombobox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+/**
+ * Combobox: input box + dropdown of models pulled live from the user's
+ * configured providers (Models page).
+ *
+ * Why a combobox and not a plain Select?
+ *   - Users sometimes want to pin an agent to a model that isn't yet in
+ *     their provider config (e.g. they're about to add it). The free-form
+ *     input lets them type any value, which is sent to the LLM API as-is.
+ *
+ * The previous implementation used a hard-coded SUGGESTED_MODELS list,
+ * which meant the dropdown was disconnected from what the user actually
+ * configured on the Models page. Fixed by accepting `groups` as a prop
+ * sourced from getConfig().providers.
+ */
+function ModelCombobox({
+  value,
+  onChange,
+  groups,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  groups: ModelGroup[];
+}) {
   const [open, setOpen] = useState(false);
   const [inputVal, setInputVal] = useState(value);
+  // Track whether the user is actively typing — only then do we filter
+  // the dropdown by inputVal. Otherwise selecting a model and re-opening
+  // the dropdown would only show that single model (the original bug).
+  const [isTyping, setIsTyping] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => { setInputVal(value); }, [value]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+        setIsTyping(false);
+      }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -63,22 +89,26 @@ function ModelCombobox({ value, onChange }: { value: string; onChange: (v: strin
   const handleInput = (v: string) => {
     setInputVal(v);
     onChange(v);
+    setIsTyping(true);
     setOpen(true);
   };
 
   const handleSelect = (m: string) => {
     setInputVal(m);
     onChange(m);
+    setIsTyping(false);
     setOpen(false);
   };
 
-  const flatModels = SUGGESTED_MODELS.flatMap(g => g.models);
-  const filtered = inputVal
-    ? SUGGESTED_MODELS.map(g => ({
-        ...g,
-        models: g.models.filter(m => m.toLowerCase().includes(inputVal.toLowerCase())),
-      })).filter(g => g.models.length > 0)
-    : SUGGESTED_MODELS;
+  const flatModels = groups.flatMap((g) => g.models);
+  const filtered = isTyping && inputVal
+    ? groups
+        .map((g) => ({
+          ...g,
+          models: g.models.filter((m) => m.toLowerCase().includes(inputVal.toLowerCase())),
+        }))
+        .filter((g) => g.models.length > 0)
+    : groups;
 
   return (
     <div ref={ref} className="relative">
@@ -86,13 +116,13 @@ function ModelCombobox({ value, onChange }: { value: string; onChange: (v: strin
         <Input
           value={inputVal}
           onChange={(e) => handleInput(e.target.value)}
-          onFocus={() => setOpen(true)}
+          onFocus={() => { setOpen(true); setIsTyping(false); }}
           placeholder="e.g. deepseek-v4-flash"
           className="pr-8 font-mono text-sm"
         />
         <button
           type="button"
-          onClick={() => setOpen(!open)}
+          onClick={() => { setOpen(!open); setIsTyping(false); }}
           className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
         >
           <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
@@ -101,6 +131,11 @@ function ModelCombobox({ value, onChange }: { value: string; onChange: (v: strin
       {open && (
         <div className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-popover shadow-lg overflow-hidden">
           <div className="max-h-64 overflow-y-auto py-1">
+            {groups.length === 0 && (
+              <p className="px-3 py-3 text-xs text-muted-foreground italic">
+                No models configured yet. Go to the <span className="font-semibold">Models</span> page to add a provider first.
+              </p>
+            )}
             {filtered.map((group) => (
               <div key={group.group}>
                 <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
@@ -119,9 +154,9 @@ function ModelCombobox({ value, onChange }: { value: string; onChange: (v: strin
                 ))}
               </div>
             ))}
-            {filtered.length === 0 && (
+            {groups.length > 0 && filtered.length === 0 && (
               <p className="px-3 py-2 text-xs text-muted-foreground italic">
-                No suggestions — press Enter to use "{inputVal}"
+                No matches — press Enter to use &quot;{inputVal}&quot; as a custom model
               </p>
             )}
           </div>
@@ -148,8 +183,13 @@ export default function AgentsPage() {
   const [saving, setSaving] = useState(false);
   const [restarting, setRestarting] = useState(false);
 
+  // Live model groups from the user's configured providers (Models page).
+  // Each provider becomes a group; entries are emitted as `${name}/${id}`
+  // to mirror the Default Model selector convention.
+  const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
+
   const [newName, setNewName] = useState("");
-  const [newModel, setNewModel] = useState("gpt-4o");
+  const [newModel, setNewModel] = useState("");
   const [newSoul, setNewSoul] = useState("");
 
   const [editModel, setEditModel] = useState("");
@@ -163,9 +203,48 @@ export default function AgentsPage() {
       .finally(() => setLoading(false));
   };
 
+  // Pull provider/model config and project it into combobox groups.
+  // Re-run when dialogs open so newly added models show up without
+  // requiring a full page refresh.
+  const fetchModelOptions = () => {
+    getConfig()
+      .then((cfg) => {
+        const groups: ModelGroup[] = [];
+        const providers = cfg.providers || {};
+        for (const [name, p] of Object.entries(providers)) {
+          const models = (p.models || [])
+            .filter((m) => m.id)
+            .map((m) => `${name}/${m.id}`);
+          if (models.length > 0) {
+            groups.push({ group: name, models });
+          }
+        }
+        setModelGroups(groups);
+
+        // Seed newModel with the first available option so the create
+        // dialog is usable out of the box.
+        setNewModel((prev) => {
+          if (prev) return prev;
+          if (groups.length > 0 && groups[0].models.length > 0) {
+            return groups[0].models[0];
+          }
+          return prev;
+        });
+      })
+      .catch(() => setModelGroups([]));
+  };
+
   useEffect(() => {
     fetchAgents();
+    fetchModelOptions();
   }, []);
+
+  // Refresh model options whenever a dialog opens — user may have
+  // visited the Models page in another tab to add new models.
+  useEffect(() => {
+    if (createOpen || editOpen) fetchModelOptions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createOpen, editOpen]);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -173,7 +252,8 @@ export default function AgentsPage() {
     await createAgent({ id: newName.trim(), model: newModel, soul: newSoul });
     setCreateOpen(false);
     setNewName("");
-    setNewModel("deepseek-v4-flash");
+    // Reset to first available model after creation
+    setNewModel(modelGroups[0]?.models[0] || "");
     setNewSoul("");
     setSaving(false);
 
@@ -354,7 +434,7 @@ export default function AgentsPage() {
             </div>
             <div className="space-y-2">
               <Label>Model</Label>
-              <ModelCombobox value={newModel} onChange={setNewModel} />
+              <ModelCombobox value={newModel} onChange={setNewModel} groups={modelGroups} />
             </div>
             <div className="space-y-2">
               <Label>Personality (SOUL.md)</Label>
@@ -400,7 +480,7 @@ export default function AgentsPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Model</Label>
-                <ModelCombobox value={editModel} onChange={setEditModel} />
+                <ModelCombobox value={editModel} onChange={setEditModel} groups={modelGroups} />
               </div>
               <div className="space-y-2">
                 <Label>Workspace</Label>

@@ -177,12 +177,37 @@ export async function updateConfig(config: Record<string, unknown>) {
 }
 
 // Chat
+export interface ChatAttachment {
+  type: "image"; // future: "document" | "audio"
+  url: string;   // data: URL or absolute http(s)://; ready to <img src=…>
+}
+
 export interface ChatHistoryMessage {
   role: "user" | "assistant" | "tool";
   content?: string;
+  attachments?: ChatAttachment[];
   toolCalls?: { id: string; name: string; arguments: string }[];
   name?: string;
   toolCallId?: string;
+}
+
+// fileURL builds the URL for the local-file proxy. Use kind="upload"
+// for files in ~/.fastclaw/uploads and kind="workspace" for files in
+// the current agent's workspace directory.
+export function fileURL(opts: { kind: "upload" | "workspace"; path: string; agentId?: string }): string {
+  const params = new URLSearchParams({ kind: opts.kind, path: opts.path });
+  if (opts.agentId) params.set("agentId", opts.agentId);
+  return `/api/files?${params.toString()}`;
+}
+
+// openWorkspace asks the server to open the agent's workspace directory
+// in the host OS file explorer (Finder, Explorer, xdg-open). Returns
+// silently on success; throws on transport failure.
+export async function openWorkspace(agentId: string): Promise<{ ok: boolean; path?: string; error?: string }> {
+  const res = await fetch(`/api/workspace/open?agentId=${encodeURIComponent(agentId)}`, {
+    method: "POST",
+  });
+  return res.json();
 }
 
 export async function getChatHistory(agentId: string, sessionId: string): Promise<ChatHistoryMessage[]> {
@@ -245,17 +270,64 @@ export interface ChatTaskRecord {
 
 // submitChat enqueues a new chat task and returns its taskId.
 // Does NOT wait for the agent to respond; subscribe via subscribeTaskEvents.
+// model is optional: pass "" / undefined to let the agent's configured
+// default win, or pass a specific model name to override it for this
+// single message only (the agent's persistent config is unchanged).
+// submitChat enqueues a new chat task. When `files` is non-empty the
+// request is sent as multipart/form-data so binaries (images today,
+// other types later) can ride along with the text. Otherwise we fall
+// back to the JSON path to keep request payloads tiny for plain text.
+//
+// model is optional ("" / undefined → the agent's configured default).
 export async function submitChat(
   agentId: string,
   sessionId: string,
   message: string,
+  model?: string,
+  files?: File[],
 ): Promise<{ taskId: string; status: ChatTaskStatus }> {
-  const res = await fetch("/api/chat/submit", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agentId, sessionId, message }),
-  });
-  if (!res.ok) throw new Error(`submit failed: ${res.status}`);
+  let res: Response;
+
+  if (files && files.length > 0) {
+    const form = new FormData();
+    form.append("agentId", agentId);
+    form.append("sessionId", sessionId);
+    form.append("message", message);
+    if (model) form.append("model", model);
+    for (const f of files) {
+      // The backend reads from r.MultipartForm.File["files"], so the
+      // field name must literally be "files" for every file.
+      form.append("files", f, f.name);
+    }
+    res = await fetch("/api/chat/submit", {
+      method: "POST",
+      // Do NOT set Content-Type — the browser fills in the multipart
+      // boundary parameter when given a FormData body.
+      body: form,
+    });
+  } else {
+    res = await fetch("/api/chat/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agentId,
+        sessionId,
+        message,
+        ...(model ? { model } : {}),
+      }),
+    });
+  }
+
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = await res.json();
+      if (body?.error) detail = `: ${body.error}`;
+    } catch {
+      /* not JSON; ignore */
+    }
+    throw new Error(`submit failed: ${res.status}${detail}`);
+  }
   return res.json();
 }
 
