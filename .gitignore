@@ -1,6 +1,11 @@
 # Binaries
 /fastclaw
 *.exe
+
+# Runtime artifacts written by the gateway when it treats this dir
+# as an agent workspace (e.g. during local dev). Don't commit these.
+/MEMORY.md
+/sessions/
 *.exe~
 *.dll
 *.so

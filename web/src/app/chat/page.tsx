@@ -7,6 +7,7 @@ import {
   getStatus,
   getChatHistory,
   getChatSessions,
+  getSkills,
   submitChat,
   subscribeTaskEvents,
   cancelTask,
@@ -18,7 +19,15 @@ import {
   type ChatAttachment,
   type ChatHistoryMessage,
   type ChatStreamEvent,
+  type SkillInfo,
 } from "@/lib/api";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Bot,
   Send,
@@ -39,6 +48,7 @@ import {
   X,
   FileText,
   FolderOpen,
+  Sparkles,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -253,6 +263,10 @@ export default function ChatPage() {
   // configured default". Resets on agent switch so the user always sees
   // the agent's own default after navigating away and back.
   const [modelOverride, setModelOverride] = useState<string>("");
+  // Skills available for the launcher dropdown. Refreshed on mount;
+  // we don't poll because installing a skill is a deliberate user
+  // action — the next page navigation will pick up the new state.
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -290,7 +304,51 @@ export default function ChatPage() {
         }
       })
       .catch(() => {});
+    // Fetch skills once on mount for the launcher button. Cheap call,
+    // doesn't grow with conversation length.
+    getSkills().then(setSkills).catch(() => setSkills([]));
   }, []);
+
+  // Group skills for the launcher dropdown: orchestrator-style first
+  // (suite > protocol), then atomic. Within each group sort by name.
+  const skillGroups = useMemo(() => {
+    const suites: SkillInfo[] = [];
+    const protocols: SkillInfo[] = [];
+    const atoms: SkillInfo[] = [];
+    for (const s of skills) {
+      if (s.kind === "suite") suites.push(s);
+      else if (s.kind === "protocol") protocols.push(s);
+      else atoms.push(s);
+    }
+    const byName = (a: SkillInfo, b: SkillInfo) => a.name.localeCompare(b.name);
+    suites.sort(byName);
+    protocols.sort(byName);
+    atoms.sort(byName);
+    return { suites, protocols, atoms };
+  }, [skills]);
+
+  // pickSkill prepends a "use this skill" hint to the input box and
+  // focuses the textarea. We deliberately do NOT auto-send — the user
+  // typically wants to add target / context after picking the skill
+  // (e.g. "use signal-agent-v8: analyse Nebius").
+  const pickSkill = useCallback((skill: SkillInfo) => {
+    const cn = (s: string) => s.replace(/`/g, "");
+    const prefix = `Use the \`${cn(skill.name)}\` ${
+      skill.kind === "suite" ? "orchestrator skill (load it first, then follow the routing table)"
+      : skill.kind === "protocol" ? "protocol skill (load it first, then follow the steps)"
+      : "skill"
+    }: `;
+    setInput((cur) => prefix + (cur.trim() ? cur : ""));
+    // Focus + place cursor at end of the prepended hint so user can
+    // immediately start typing the task.
+    setTimeout(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(prefix.length, prefix.length + (input.trim() ? input.length : 0));
+      }
+    }, 0);
+  }, [input]);
 
   // Reset model override whenever the user picks a different agent.
   // Each agent has its own configured default; the override is meant
@@ -1070,6 +1128,88 @@ export default function ChatPage() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
+                  {/* Skill launcher — picks any installed skill and
+                      prepends a "Use the X skill: " hint to the input.
+                      Especially useful for orchestrator (suite/protocol)
+                      skills where the agent benefits from being told
+                      explicitly which entry point to follow. */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      disabled={sending || !selectedAgent || skills.length === 0}
+                      title="Launch with a skill"
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-72 max-h-[60vh] overflow-y-auto">
+                      {skillGroups.suites.length > 0 && (
+                        <>
+                          <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground/70 font-semibold select-none">
+                            编排器 (Orchestrators)
+                          </div>
+                          {skillGroups.suites.map((s) => (
+                            <DropdownMenuItem
+                              key={s.name}
+                              onClick={() => pickSkill(s)}
+                              className="flex flex-col items-start gap-0.5 py-2"
+                            >
+                              <span className="text-sm font-mono">{s.name}</span>
+                              {s.description && (
+                                <span className="text-[10px] text-muted-foreground line-clamp-2">
+                                  {s.description}
+                                </span>
+                              )}
+                            </DropdownMenuItem>
+                          ))}
+                          {(skillGroups.protocols.length > 0 || skillGroups.atoms.length > 0) && <DropdownMenuSeparator />}
+                        </>
+                      )}
+                      {skillGroups.protocols.length > 0 && (
+                        <>
+                          <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground/70 font-semibold select-none">
+                            协议 (Protocols)
+                          </div>
+                          {skillGroups.protocols.map((s) => (
+                            <DropdownMenuItem
+                              key={s.name}
+                              onClick={() => pickSkill(s)}
+                              className="flex flex-col items-start gap-0.5 py-2"
+                            >
+                              <span className="text-sm font-mono">{s.name}</span>
+                              {s.description && (
+                                <span className="text-[10px] text-muted-foreground line-clamp-2">
+                                  {s.description}
+                                </span>
+                              )}
+                            </DropdownMenuItem>
+                          ))}
+                          {skillGroups.atoms.length > 0 && <DropdownMenuSeparator />}
+                        </>
+                      )}
+                      {skillGroups.atoms.length > 0 && (
+                        <>
+                          <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground/70 font-semibold select-none">
+                            原子 Skill ({skillGroups.atoms.length})
+                          </div>
+                          {skillGroups.atoms.map((s) => (
+                            <DropdownMenuItem
+                              key={s.name}
+                              onClick={() => pickSkill(s)}
+                              className="flex flex-col items-start gap-0.5 py-1.5"
+                            >
+                              <span className="text-xs font-mono">{s.name}</span>
+                              {s.description && (
+                                <span className="text-[10px] text-muted-foreground line-clamp-1">
+                                  {s.description}
+                                </span>
+                              )}
+                            </DropdownMenuItem>
+                          ))}
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
                   {/* Paperclip — opens the file picker. Hidden during
                       sending to avoid the user mutating the queue while
                       a request is mid-flight (the in-flight task already

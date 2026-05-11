@@ -70,11 +70,12 @@ type SkillRequires struct {
 
 // SkillsLoader discovers and merges skills from multiple layers with OpenClaw compatibility.
 type SkillsLoader struct {
-	homeDir     string
-	agentDir    string
-	teamDir     string
-	skillsCfg   config.SkillsConfig
-	globalCfg   config.SkillsCfg
+	homeDir   string
+	agentDir  string
+	agentID   string // for ~/.fastclaw/agents/<id>/agent/skills/ scoped skills
+	teamDir   string
+	skillsCfg config.SkillsConfig
+	globalCfg config.SkillsCfg
 }
 
 // NewSkillsLoader creates a new skills loader.
@@ -88,10 +89,28 @@ func NewSkillsLoader(homeDir, agentDir, teamDir string, skillsCfg config.SkillsC
 }
 
 // NewSkillsLoaderWithGlobal creates a skills loader with global SkillsCfg for env injection and entries.
-func NewSkillsLoaderWithGlobal(homeDir, agentDir, teamDir string, skillsCfg config.SkillsConfig, globalCfg config.SkillsCfg) *SkillsLoader {
+//
+// agentID may be empty for callers that don't have it on hand; passing
+// it enables a second per-agent skills source rooted at
+// ~/.fastclaw/agents/<agentID>/agent/skills/. That path is what the
+// Web UI's "move skill to agent" flow targets, so it MUST be
+// discoverable by the runtime — otherwise the agent silently loses
+// access to skills the user thought were installed for it.
+func NewSkillsLoaderWithGlobal(homeDir, agentDir, teamDir, agentID string, skillsCfg config.SkillsConfig, globalCfg config.SkillsCfg) *SkillsLoader {
 	sl := NewSkillsLoader(homeDir, agentDir, teamDir, skillsCfg)
+	sl.agentID = agentID
 	sl.globalCfg = globalCfg
 	return sl
+}
+
+// agentScopedSkillsDir returns the canonical per-agent skills location
+// under ~/.fastclaw/agents/<id>/agent/skills/, or "" when no agentID
+// has been wired in (legacy callers).
+func (sl *SkillsLoader) agentScopedSkillsDir() string {
+	if sl.agentID == "" {
+		return ""
+	}
+	return filepath.Join(sl.homeDir, "agents", sl.agentID, "agent", "skills")
 }
 
 // LoadSkills discovers skills from all layers and returns them merged.
@@ -110,7 +129,7 @@ func (sl *SkillsLoader) LoadSkills() []Skill {
 		}
 	}
 
-	// Layer 4 (lowest): extra dirs from config
+	// Layer 5 (lowest): extra dirs from config
 	for _, dir := range sl.globalCfg.Load.ExtraDirs {
 		dir = expandPath(dir)
 		for name, skill := range discoverSkillsEnhanced(dir, "extra") {
@@ -120,7 +139,19 @@ func (sl *SkillsLoader) LoadSkills() []Skill {
 		}
 	}
 
-	// Layer 3: managed skills (~/.fastclaw/skills/)
+	// Layer 4: builtin skills shipped with the binary (the project's
+	// skills/ directory). Loaded BEFORE user-installed so any user
+	// skill of the same name overrides — that's the same precedence
+	// the Web UI's Skills page documents and what users expect.
+	if dir := builtinSkillsDir(); dir != "" {
+		for name, skill := range discoverSkillsEnhanced(dir, "builtin") {
+			if !disabled[name] {
+				skills[name] = skill
+			}
+		}
+	}
+
+	// Layer 3: managed skills (~/.fastclaw/managed-skills/)
 	managedDir := fastclawManagedDir()
 	for name, skill := range discoverSkillsEnhanced(managedDir, "managed") {
 		if !disabled[name] {
@@ -146,7 +177,22 @@ func (sl *SkillsLoader) LoadSkills() []Skill {
 		}
 	}
 
-	// Layer 1 (highest): agent workspace skills
+	// Layer 1.25: per-agent scoped skills under ~/.fastclaw/agents/<id>/agent/skills/.
+	// This is where the Web UI's "move to agent" places skills, and
+	// where the Skills page lists them from. Without this layer the
+	// runtime silently ignores anything the user installed there —
+	// they show up in the UI but the agent can't see them.
+	if scoped := sl.agentScopedSkillsDir(); scoped != "" {
+		for name, skill := range discoverSkillsEnhanced(scoped, "agent") {
+			if !disabled[name] {
+				skills[name] = skill
+			}
+		}
+	}
+
+	// Layer 1 (highest): agent workspace skills (i.e. the agent's own
+	// working directory). Wins over the per-agent scoped layer above
+	// because workspace edits should always trump installed defaults.
 	agentSkillsDir := filepath.Join(sl.agentDir, "skills")
 	for name, skill := range discoverSkillsEnhanced(agentSkillsDir, "agent") {
 		if !disabled[name] {
@@ -236,17 +282,34 @@ func (sl *SkillsLoader) AllSkillDirs() []string {
 func (sl *SkillsLoader) allSkillDirs() []string {
 	var dirs []string
 	dirs = append(dirs, filepath.Join(sl.agentDir, "skills"))
+	if scoped := sl.agentScopedSkillsDir(); scoped != "" {
+		dirs = append(dirs, scoped)
+	}
 	if sl.teamDir != "" {
 		dirs = append(dirs, filepath.Join(sl.teamDir, "skills"))
 	}
 	dirs = append(dirs, filepath.Join(sl.homeDir, "skills"))
 	dirs = append(dirs, fastclawManagedDir())
+	if b := builtinSkillsDir(); b != "" {
+		dirs = append(dirs, b)
+	}
 	dirs = append(dirs, sl.globalCfg.Load.ExtraDirs...)
 	return dirs
 }
 
-// discoverSkillsEnhanced scans a directory for skill subdirectories with SKILL.md,
-// parses frontmatter, applies gating, and replaces {baseDir}.
+// discoverSkillsEnhanced scans a directory for skills. A "skill" can be:
+//   * a subdirectory containing SKILL.md (the canonical layout, with
+//     supporting files alongside), OR
+//   * a top-level *.md file (single-file skill — convention used for
+//     short, self-contained skills like tradingagents-ashare.md).
+//
+// Both forms are picked up because the Web UI's Skills page already
+// shows them via scanSkillsDir; previously only the directory form
+// reached the agent runtime, so agents couldn't see — let alone load
+// — single-file skills the user clearly intended for them.
+//
+// In both cases we parse YAML frontmatter (when present), apply gating,
+// and substitute {baseDir} in the content body.
 func discoverSkillsEnhanced(dir string, layer string) map[string]Skill {
 	result := make(map[string]Skill)
 
@@ -256,55 +319,75 @@ func discoverSkillsEnhanced(dir string, layer string) map[string]Skill {
 	}
 
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if entry.IsDir() {
+			// Canonical: <dir>/<name>/SKILL.md
+			skillDir := filepath.Join(dir, entry.Name())
+			skillFile := filepath.Join(skillDir, "SKILL.md")
+			data, err := os.ReadFile(skillFile)
+			if err != nil {
+				continue
+			}
+			absDir, _ := filepath.Abs(skillDir)
+			if sk, ok := buildSkillFromBytes(entry.Name(), layer, data, absDir); ok {
+				result[sk.Name] = sk
+			}
 			continue
 		}
-		skillDir := filepath.Join(dir, entry.Name())
-		skillFile := filepath.Join(skillDir, "SKILL.md")
-		data, err := os.ReadFile(skillFile)
+
+		// Single-file: <dir>/<name>.md (skip README.md and dotfiles)
+		name := entry.Name()
+		lower := strings.ToLower(name)
+		if !strings.HasSuffix(lower, ".md") || lower == "readme.md" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		skillPath := filepath.Join(dir, name)
+		data, err := os.ReadFile(skillPath)
 		if err != nil {
 			continue
 		}
-
-		content := strings.TrimSpace(string(data))
-		absDir, _ := filepath.Abs(skillDir)
-
-		// Parse frontmatter
-		fm := parseFrontmatterFromBytes(data)
-		var meta *SkillMetadata
-		var desc string
-		if fm != nil {
-			desc = fm.Description
-			if fm.Metadata.Kind == yaml.MappingNode {
-				meta = parseMetadata(&fm.Metadata)
-			}
-		}
-
-		// Replace {baseDir} with the skill's absolute directory path
-		content = strings.ReplaceAll(content, "{baseDir}", absDir)
-
-		// Apply gating
-		gated, gateReason := checkGating(meta)
-
-		name := entry.Name()
-		if fm != nil && fm.Name != "" {
-			// Use directory name as the key, but store the frontmatter name
-			_ = fm.Name
-		}
-
-		result[name] = Skill{
-			Name:        name,
-			Layer:       layer,
-			Content:     content,
-			BaseDir:     absDir,
-			Description: desc,
-			Metadata:    meta,
-			Gated:       gated,
-			GateReason:  gateReason,
+		// For single-file skills, {baseDir} resolves to the parent dir
+		// so any sibling assets (in the same skills/ folder) remain
+		// addressable. The skill itself is the file, not a subdir.
+		absParent, _ := filepath.Abs(dir)
+		skillName := strings.TrimSuffix(name, filepath.Ext(name))
+		if sk, ok := buildSkillFromBytes(skillName, layer, data, absParent); ok {
+			result[sk.Name] = sk
 		}
 	}
 
 	return result
+}
+
+// buildSkillFromBytes turns raw SKILL content into a Skill record.
+// Shared between the directory and single-file discovery branches so
+// frontmatter parsing / gating / {baseDir} substitution stay identical.
+func buildSkillFromBytes(name, layer string, data []byte, baseDir string) (Skill, bool) {
+	content := strings.TrimSpace(string(data))
+
+	fm := parseFrontmatterFromBytes(data)
+	var meta *SkillMetadata
+	var desc string
+	if fm != nil {
+		desc = fm.Description
+		if fm.Metadata.Kind == yaml.MappingNode {
+			meta = parseMetadata(&fm.Metadata)
+		}
+	}
+
+	content = strings.ReplaceAll(content, "{baseDir}", baseDir)
+
+	gated, gateReason := checkGating(meta)
+
+	return Skill{
+		Name:        name,
+		Layer:       layer,
+		Content:     content,
+		BaseDir:     baseDir,
+		Description: desc,
+		Metadata:    meta,
+		Gated:       gated,
+		GateReason:  gateReason,
+	}, true
 }
 
 // parseFrontmatter reads and parses YAML frontmatter from a SKILL.md file path.
@@ -467,6 +550,35 @@ func fastclawManagedDir() string {
 		return ""
 	}
 	return filepath.Join(home, ".fastclaw", "managed-skills")
+}
+
+// builtinSkillsDir locates the project-shipped skills/ directory by
+// probing common positions relative to the running binary. Returns ""
+// if we can't find it (binary moved standalone, etc).
+//
+// Mirrors the same probe that internal/setup uses for the Web UI's
+// Skills page, so the runtime view and the UI view stay in sync.
+//
+// Probe order:
+//  1. {exeDir}/skills/      – installed layout (binary + skills side-by-side)
+//  2. {exeDir}/../skills/   – go run / dev (bin/fastclaw + ../skills/)
+//  3. ./skills/             – CWD fallback
+func builtinSkillsDir() string {
+	candidates := []string{}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		candidates = append(candidates,
+			filepath.Join(exeDir, "skills"),
+			filepath.Join(exeDir, "..", "skills"),
+		)
+	}
+	candidates = append(candidates, "skills")
+	for _, p := range candidates {
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			return p
+		}
+	}
+	return ""
 }
 
 func expandPath(path string) string {

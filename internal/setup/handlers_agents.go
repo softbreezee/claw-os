@@ -5,11 +5,66 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 )
 
 // --- Agent Management ---
+
+// normalizeModel ensures every model name carries an explicit
+// "<provider>/" prefix, matching the multi-provider routing convention.
+// Models stored from before the registry refactor (or typed without
+// a prefix in the UI) get the prefix injected so list / save round-trip
+// produces stable, displayable values.
+//
+// If the model already contains "/" we trust it. If no providers are
+// configured we leave it alone (callers fall back to the bare name).
+//
+// Provider selection order, matching gateway.buildProviderRegistry:
+//   1. Prefix of cfg.Agents.Defaults.Model
+//   2. "default" / "openai" / "openrouter" (in that order)
+//   3. Lexicographically first registered provider
+func normalizeModel(model string, cfg *config.Config) string {
+	if model == "" || strings.Contains(model, "/") {
+		return model
+	}
+	if cfg == nil || len(cfg.Providers) == 0 {
+		return model
+	}
+
+	// Pick provider (mirrors gateway.buildProviderRegistry's default rules)
+	chosen := ""
+	if def := cfg.Agents.Defaults.Model; strings.Contains(def, "/") {
+		candidate := def[:strings.Index(def, "/")]
+		if _, ok := cfg.Providers[candidate]; ok {
+			chosen = candidate
+		}
+	}
+	if chosen == "" {
+		for _, key := range []string{"default", "openai", "openrouter"} {
+			if _, ok := cfg.Providers[key]; ok {
+				chosen = key
+				break
+			}
+		}
+	}
+	if chosen == "" {
+		names := make([]string, 0, len(cfg.Providers))
+		for n := range cfg.Providers {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		if len(names) > 0 {
+			chosen = names[0]
+		}
+	}
+	if chosen == "" {
+		return model
+	}
+	return chosen + "/" + model
+}
 
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.Load()
@@ -27,7 +82,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		agents = append(agents, map[string]any{
 			"id":                ra.ID,
-			"model":             ra.Model,
+			"model":             normalizeModel(ra.Model, cfg),
 			"workspace":         ra.Workspace,
 			"maxTokens":         ra.MaxTokens,
 			"temperature":       ra.Temperature,
@@ -62,6 +117,11 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
+
+	// Normalise into "<provider>/<id>" form so saved config matches
+	// what the UI later displays — avoids the "looks different but
+	// works" inconsistency old configs exhibited.
+	req.Model = normalizeModel(req.Model, cfg)
 
 	// Add agent to config
 	cfg.Agents.List = append(cfg.Agents.List, config.AgentEntry{
@@ -105,6 +165,13 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
+	}
+
+	// Normalise BEFORE writing so the next list call sees the
+	// prefixed form (and so the file on disk stays consistent
+	// with the rest of the multi-provider conventions).
+	if req.Model != "" {
+		req.Model = normalizeModel(req.Model, cfg)
 	}
 
 	found := false

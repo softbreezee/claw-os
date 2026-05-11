@@ -1,0 +1,75 @@
+{
+  "version": "4.0.0",
+  "_comment": "MCP 数据连接器配置。v4.0 更新：新增 data_routing 映射和 cache 配置。填入 API key 并设 enabled=true 后即可使用自动数据获取。所有终端默认关闭（enabled=false）。",
+  "connectors": {
+    "daloopa": {
+      "url": "https://mcp.daloopa.com/server/mcp",
+      "enabled": false,
+      "api_key": "",
+      "priority": 1,
+      "capabilities": ["historical_financials", "kpi_extraction"],
+      "note": "历史财务数据自动提取，支持 10-K/10-Q 解析"
+    },
+    "factset": {
+      "url": "https://mcp.factset.com/mcp",
+      "enabled": false,
+      "api_key": "",
+      "priority": 2,
+      "capabilities": ["market_data", "consensus_estimates", "peer_screening"],
+      "note": "市场数据、分析师共识预期、可比公司筛选"
+    },
+    "sp_kensho": {
+      "url": "https://kfinance.kensho.com/integrations/mcp",
+      "enabled": false,
+      "api_key": "",
+      "priority": 3,
+      "capabilities": ["fundamentals", "industry_classification", "supply_chain"],
+      "note": "基本面数据、GICS 行业分类、供应链关系图谱"
+    },
+    "morningstar": {
+      "url": "https://mcp.morningstar.com/mcp",
+      "enabled": false,
+      "api_key": "",
+      "priority": 4,
+      "capabilities": ["valuation", "esg_scores", "fund_flows"],
+      "note": "公允价值估计、ESG 评分、基金资金流"
+    },
+    "lseg": {
+      "url": "https://api.analytics.lseg.com/lfa/mcp",
+      "enabled": false,
+      "api_key": "",
+      "priority": 5,
+      "capabilities": ["real_time_prices", "fixed_income", "fx_rates", "yield_curves"],
+      "note": "实时价格、债券/固收、外汇、利率曲线"
+    },
+    "pitchbook": {
+      "url": "https://premium.mcp.pitchbook.com/mcp",
+      "enabled": false,
+      "api_key": "",
+      "priority": 6,
+      "capabilities": ["pe_vc_deals", "fund_performance", "company_profiles"],
+      "note": "PE/VC 交易数据、基金业绩、非上市公司概况"
+    }
+  },
+  "data_routing": {
+    "historical_financials": ["daloopa", "sp_kensho", "factset"],
+    "market_cap_and_ev": ["factset", "lseg", "morningstar"],
+    "consensus_estimates": ["factset", "sp_kensho"],
+    "comps_multiples": ["factset", "sp_kensho", "morningstar"],
+    "peer_screening": ["factset", "sp_kensho"],
+    "ma_transactions": ["pitchbook", "sp_kensho"],
+    "debt_and_credit": ["lseg", "factset"],
+    "private_company": ["pitchbook", "daloopa"]
+  },
+  "fallback_strategy": "user_input",
+  "auto_fill_confidence_threshold": 4,
+  "data_max_age_days": 90,
+  "cache": {
+    "enabled": true,
+    "ttl_seconds": {
+      "market_data": 3600,
+      "consensus_estimates": 86400,
+      "historical_financials": 604800
+    }
+  }
+}

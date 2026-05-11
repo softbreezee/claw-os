@@ -172,6 +172,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Skills
 	mux.HandleFunc("GET /api/skills", s.handleListSkills)
+	mux.HandleFunc("GET /api/skills/{name}", s.handleGetSkill)
 	mux.HandleFunc("DELETE /api/skills/{name}", s.handleDeleteSkill)
 	mux.HandleFunc("POST /api/skills/{name}/move", s.handleMoveSkill)
 
@@ -190,6 +191,12 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/cron", s.handleCreateCronJob)
 	mux.HandleFunc("PUT /api/cron/{id}", s.handleUpdateCronJob)
 	mux.HandleFunc("DELETE /api/cron/{id}", s.handleDeleteCronJob)
+
+	// Apps (quick-launch external web tools)
+	mux.HandleFunc("GET /api/apps", s.handleListApps)
+	mux.HandleFunc("POST /api/apps", s.handleCreateApp)
+	mux.HandleFunc("PUT /api/apps/{name}", s.handleUpdateApp)
+	mux.HandleFunc("DELETE /api/apps/{name}", s.handleDeleteApp)
 
 	// OpenAI-compatible API and WebSocket gateway
 	if s.apiServer != nil {

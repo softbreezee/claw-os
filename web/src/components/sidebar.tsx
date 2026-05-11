@@ -17,6 +17,7 @@ import {
   Sun,
   Moon,
   Circle,
+  AppWindow,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useTheme } from "@/components/theme-provider";
@@ -38,6 +39,7 @@ const navGroups = [
       { href: "/plugins/", label: "Plugins", icon: Puzzle },
       { href: "/channels/", label: "Channels", icon: Radio },
       { href: "/cron/", label: "Cron Jobs", icon: Clock },
+      { href: "/apps/", label: "Apps", icon: AppWindow },
     ],
   },
   {

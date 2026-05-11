@@ -170,6 +170,17 @@ type Config struct {
 	Memory        MemoryCfg                  `json:"memory,omitempty"`
 	Privacy       PrivacyCfg                 `json:"privacy,omitempty"`
 	SkillsLearner SkillsLearnerCfg           `json:"skillsLearner,omitempty"`
+	Apps          []AppEntry                 `json:"apps,omitempty"`
+}
+
+// AppEntry represents a quick-launch web app shown on the Apps page.
+// It's pure UI sugar — fastclaw doesn't fetch or proxy these URLs;
+// clicking opens the URL in a new tab. Useful for keeping companion
+// dashboards (like surge.sh-hosted analysis tools) one click away.
+type AppEntry struct {
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Description string `json:"description,omitempty"`
 }
 
 // ModelCost holds pricing info for a model.

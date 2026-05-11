@@ -1,0 +1,28 @@
+{
+  "_template": "Layer 2 Confirmation Slip — fill all fields before proceeding to Layer 3",
+  "lock_timestamp": "YYYY-MM-DDTHH:MM:SSZ",
+  "partner_name": "",
+  "model_context": {
+    "company": "",
+    "track": "HF | BT | Full",
+    "entry_point": "public | private",
+    "granularity_tier": "Simple | Standard | Full"
+  },
+  "locked_assumptions": {
+    "revenue_base_year": null,
+    "revenue_cagr_5yr": null,
+    "ebitda_margin_terminal": null,
+    "tax_rate": null,
+    "capex_pct_revenue": null,
+    "nwc_pct_revenue": null,
+    "terminal_growth_rate": null,
+    "wacc": null,
+    "hold_period_years": null
+  },
+  "scenarios_binned": {
+    "bear": { "cagr": null, "margin": null, "rationale": "" },
+    "base": { "cagr": null, "margin": null, "rationale": "" },
+    "bull": { "cagr": null, "margin": null, "rationale": "" }
+  },
+  "validation_log": []
+}

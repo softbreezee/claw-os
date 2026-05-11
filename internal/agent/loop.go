@@ -103,7 +103,7 @@ func NewAgentWithFullCfg(rc config.ResolvedAgent, prov provider.Provider, mb *bu
 		if model == "" {
 			model = rc.Model
 		}
-		learnerLoader := NewSkillsLoaderWithGlobal(homeDir, rc.Workspace, "", rc.Skills, fullCfg.Skills)
+		learnerLoader := NewSkillsLoaderWithGlobal(homeDir, rc.Workspace, "", rc.ID, rc.Skills, fullCfg.Skills)
 		ag.skillsLearner = NewSkillsLearner(rc.Workspace, prov, model, learnerLoader.AllSkillDirs()...)
 		if fullCfg.SkillsLearner.MinToolCalls > 0 {
 			ag.skillsLearner.minToolCalls = fullCfg.SkillsLearner.MinToolCalls
@@ -125,10 +125,14 @@ func NewAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider.Provider, mb *
 	tools.RegisterMessage(registry, mb)
 	tools.RegisterMemorySearch(registry, rc.Workspace)
 	tools.RegisterWebFetch(registry)
-	tools.RegisterLoadSkill(registry, homeDir, rc.Workspace, "")
+	// Pass the builtin skills dir so load_skill can also resolve
+	// shipped skills (docx, pdf, debugging, …) by name. Computed once
+	// at agent construction; if the binary moves at runtime the agent
+	// will see stale results until restart, which is fine.
+	tools.RegisterLoadSkill(registry, homeDir, rc.Workspace, "", rc.ID, builtinSkillsDir())
 
 	// Load skills with OpenClaw compatibility
-	loader := NewSkillsLoaderWithGlobal(homeDir, rc.Workspace, "", rc.Skills, globalSkillsCfg)
+	loader := NewSkillsLoaderWithGlobal(homeDir, rc.Workspace, "", rc.ID, rc.Skills, globalSkillsCfg)
 	skills := loader.LoadSkills()
 	skillsSummary := loader.BuildSkillsSummary(skills)
 
@@ -298,7 +302,10 @@ func (a *Agent) InjectGroupMessage(ctx context.Context, msg bus.InboundMessage) 
 // SetSubAgentSpawner sets the sub-agent spawner for the spawn_subagent tool.
 func (a *Agent) SetSubAgentSpawner(spawner tools.SubAgentSpawner) {
 	a.subAgentSpawner = spawner
-	tools.RegisterSubAgent(a.registry, spawner, a.name)
+	// Pass AttachmentsFromContext as the getter so spawn_subagent's
+	// forward_attachments=true can lift the current turn's attachments
+	// out of ctx and re-attach them to the sub-agent's InboundMessage.
+	tools.RegisterSubAgent(a.registry, spawner, a.name, AttachmentsFromContext)
 }
 
 // PGBackend groups the PostgreSQL stores that an agent can use.
@@ -462,6 +469,15 @@ func (a *Agent) CostTracker() *costtracker.Tracker {
 
 // HandleMessage processes an inbound message through the ReAct loop.
 func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) string {
+	// Sync attachments from msg into ctx so any spawn_subagent calls
+	// inside this turn (with forward_attachments=true) see the right
+	// set. Without this, a sub-agent invoked from another sub-agent
+	// would inherit the topmost caller's attachments, not its own
+	// inbound's.
+	if len(msg.Attachments) > 0 {
+		ctx = ContextWithAttachments(ctx, msg.Attachments)
+	}
+
 	// Check for slash commands first
 	if result := a.handleSlashCommand(msg); result.handled {
 		emitEvent(ctx, ChatEvent{Type: "content", Data: map[string]any{"content": result.reply}})
@@ -483,7 +499,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	//   1. New `Attachments` field (Web UI multi-file path)
 	//   2. Legacy `PhotoURL` (Telegram single-photo path)
 	//   3. Plain text
-	userMsg := buildUserMessage(msg)
+	userMsg := buildUserMessage(msg, effectiveModel(ctx, a.model))
 	sess.Append(userMsg)
 
 	// Context compaction: check if session messages are too large
@@ -753,7 +769,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterSystemPrompt})
 
 	// Store raw user message — see HandleMessage for the fall-through rules.
-	userMsg := buildUserMessage(msg)
+	userMsg := buildUserMessage(msg, effectiveModel(ctx, a.model))
 	sess.Append(userMsg)
 
 	sessionMsgs := sess.GetMessages()
@@ -940,7 +956,7 @@ func (a *Agent) UpdateConfig(rc config.ResolvedAgent) {
 func (a *Agent) ReloadWorkspaceFiles() {
 	a.memory = NewMemory(a.workspacePath)
 	// Rebuild skills summary
-	loader := NewSkillsLoaderWithGlobal(a.homeDir, a.workspacePath, "", a.skillsCfg, a.globalSkillsCfg)
+	loader := NewSkillsLoaderWithGlobal(a.homeDir, a.workspacePath, "", a.name, a.skillsCfg, a.globalSkillsCfg)
 	skills := loader.LoadSkills()
 	skillsSummary := loader.BuildSkillsSummary(skills)
 	a.ctxBuilder = NewContextBuilder(a.workspacePath, a.memory, skillsSummary)

@@ -44,7 +44,8 @@ func skillListCmd() *cobra.Command {
 				globalCfg = cfg.Skills
 			}
 
-			loader := agent.NewSkillsLoaderWithGlobal(homeDir, ".", "", config.SkillsConfig{}, globalCfg)
+			// CLI lists skills across all agents — no per-agent scope here.
+			loader := agent.NewSkillsLoaderWithGlobal(homeDir, ".", "", "", config.SkillsConfig{}, globalCfg)
 			loaded := loader.LoadSkills()
 
 			if len(loaded) == 0 {

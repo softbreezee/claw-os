@@ -5,10 +5,39 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
 )
+
+// isVisionModel reports whether the named model can directly consume
+// image content parts. We use a conservative allow-list rather than
+// a deny-list because mistakes here are expensive: sending an image
+// to a non-vision model returns a hard 400 and breaks the whole turn.
+//
+// When in doubt, NEW models default to non-vision (text breadcrumb path),
+// which is the safer failure mode — the agent still knows files were
+// attached and can choose to forward them to a vision sub-agent via
+// spawn_subagent(forward_attachments=true).
+func isVisionModel(model string) bool {
+	m := strings.ToLower(provider.StripProviderPrefix(model))
+	switch {
+	case strings.HasPrefix(m, "claude-"):
+		return true
+	case strings.HasPrefix(m, "gpt-4o"), strings.HasPrefix(m, "gpt-4-turbo"), strings.HasPrefix(m, "gpt-5"):
+		return true
+	case strings.HasPrefix(m, "o1"):
+		return true
+	case strings.HasPrefix(m, "kimi-k2"), strings.HasPrefix(m, "kimi-vl"):
+		return true
+	case strings.HasPrefix(m, "qwen-vl"), strings.HasPrefix(m, "qwen2-vl"), strings.HasPrefix(m, "qwen2.5-vl"):
+		return true
+	case strings.HasPrefix(m, "gemini-"):
+		return true
+	}
+	return false
+}
 
 // buildContentParts turns a user-typed text plus a list of attachments
 // into the ContentParts slice that gets sent to the LLM.
@@ -84,26 +113,42 @@ func buildContentParts(text string, attachments []bus.Attachment) ([]provider.Co
 
 // buildUserMessage constructs the provider.Message for an inbound
 // user turn, choosing the right shape (plain Content vs. ContentParts)
-// based on which attachment fields are populated. Used by both the
-// non-streaming and streaming agent loops to keep the conversion
-// logic in one place.
+// based on which attachment fields are populated AND whether the
+// receiving model can actually see images.
 //
 // Resolution order:
-//   1. Web-UI Attachments      → multimodal ContentParts via buildContentParts
-//   2. Telegram-style PhotoURL → single image_url ContentPart (legacy)
-//   3. Plain text              → simple Content string
-func buildUserMessage(msg bus.InboundMessage) provider.Message {
+//   1. Attachments + vision model → multimodal ContentParts (inline base64)
+//   2. Attachments + non-vision model → text breadcrumb listing the files,
+//      so the LLM knows they exist and can decide to delegate to a
+//      vision sub-agent via spawn_subagent(forward_attachments=true).
+//      The actual files stay reachable via AttachmentsFromContext.
+//   3. Telegram-style PhotoURL → single image_url ContentPart (legacy)
+//   4. Plain text → simple Content string
+func buildUserMessage(msg bus.InboundMessage, model string) provider.Message {
 	if len(msg.Attachments) > 0 {
-		parts, err := buildContentParts(msg.Text, msg.Attachments)
-		if err != nil {
-			slog.Warn("multimodal: build parts failed, falling back to text-only",
-				"error", err)
+		if isVisionModel(model) {
+			parts, err := buildContentParts(msg.Text, msg.Attachments)
+			if err != nil {
+				slog.Warn("multimodal: build parts failed, falling back to text breadcrumb",
+					"error", err, "model", model)
+			}
+			if len(parts) > 0 {
+				return provider.Message{Role: "user", ContentParts: parts}
+			}
 		}
-		if len(parts) > 0 {
-			return provider.Message{Role: "user", ContentParts: parts}
+		// Non-vision model (or part-build failure): describe attachments
+		// in text. The agent SOUL prompt is expected to teach delegation
+		// to a vision-capable sub-agent when this path fires.
+		return provider.Message{
+			Role:    "user",
+			Content: textWithAttachmentBreadcrumb(msg.Text, msg.Attachments),
 		}
 	}
 	if msg.PhotoURL != "" {
+		// Legacy single-photo path (Telegram). We don't currently know
+		// the receiving agent's model on this code path; assume vision
+		// — Telegram bots that wire up photos are typically configured
+		// against a vision model anyway.
 		return provider.Message{
 			Role: "user",
 			ContentParts: []provider.ContentPart{
@@ -113,6 +158,41 @@ func buildUserMessage(msg bus.InboundMessage) provider.Message {
 		}
 	}
 	return provider.Message{Role: "user", Content: msg.Text}
+}
+
+// textWithAttachmentBreadcrumb appends a structured listing of the
+// attachments to the user's text so a non-vision LLM is at least aware
+// they exist. Format is intentionally machine-friendly so we can
+// reference indices later in tool calls (e.g. forward_attachments).
+//
+// Example output:
+//
+//   What's in this picture?
+//
+//   [Attached files]
+//   [0] image/png — diagram.png (124 KB)
+//   [1] image/jpeg — photo.jpg (480 KB)
+//
+//   Note: you cannot see images directly. To analyse them, use
+//   spawn_subagent with a vision-capable agent and forward_attachments=true.
+func textWithAttachmentBreadcrumb(text string, atts []bus.Attachment) string {
+	var b strings.Builder
+	if text != "" {
+		b.WriteString(text)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("[Attached files]\n")
+	for i, a := range atts {
+		mime := a.MimeType
+		if mime == "" {
+			mime = "application/octet-stream"
+		}
+		fmt.Fprintf(&b, "[%d] %s — %s (%d KB)\n", i, mime, a.Name, a.Size/1024)
+	}
+	b.WriteString("\nNote: this model cannot see images directly. To analyse them, ")
+	b.WriteString("call spawn_subagent with a vision-capable agent ")
+	b.WriteString("and forward_attachments=true.")
+	return b.String()
 }
 
 // flattenUserContent splits a user provider.Message back into a text

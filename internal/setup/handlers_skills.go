@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // --- Skills ---
@@ -28,9 +29,15 @@ type skillInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Location    string `json:"location"`
-	Type        string `json:"type"`            // "builtin" | "user" | "agent"
+	Type        string `json:"type"`            // layer: "builtin" | "user" | "agent"
 	Builtin     bool   `json:"builtin"`         // convenience flag for the UI
 	Owner       string `json:"owner,omitempty"` // agent id when scoped to one
+	// Kind comes from the SKILL.md frontmatter `type:` field. Common
+	// values seen in the wild: "skill" (atomic), "protocol" (multi-step
+	// procedure), "suite" (orchestrator that loads other skills).
+	// The UI uses this to badge orchestrator-style skills differently
+	// from atomic capability skills.
+	Kind string `json:"kind,omitempty"`
 }
 
 func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +96,59 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, out)
 }
 
+// GET /api/skills/{name} – returns the full SKILL.md content of one
+// skill, located via the same scan-all-layers logic as the list
+// endpoint. Used by the Skills page detail dialog.
+func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "skill name required"})
+		return
+	}
+	homeDir, err := config.HomeDir()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	// Probe the same layer roots as handleListSkills, in the same
+	// precedence order (per-agent > user > builtin). At each layer
+	// accept either <name>/SKILL.md or <name>.md.
+	roots := []string{}
+	agentsDir := filepath.Join(homeDir, "agents")
+	if entries, rerr := os.ReadDir(agentsDir); rerr == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				roots = append(roots, filepath.Join(agentsDir, e.Name(), "agent", "skills"))
+			}
+		}
+	}
+	roots = append(roots, filepath.Join(homeDir, "skills"))
+	if b := builtinSkillsDir(); b != "" {
+		roots = append(roots, b)
+	}
+
+	for _, root := range roots {
+		for _, candidate := range []string{
+			filepath.Join(root, name, "SKILL.md"),
+			filepath.Join(root, name+".md"),
+		} {
+			data, err := os.ReadFile(candidate)
+			if err != nil {
+				continue
+			}
+			jsonResponse(w, http.StatusOK, map[string]any{
+				"name":     name,
+				"content":  string(data),
+				"location": candidate,
+			})
+			return
+		}
+	}
+
+	jsonResponse(w, http.StatusNotFound, map[string]any{"error": "skill not found"})
+}
+
 // builtinSkillsDir locates the project-shipped skills/ directory by
 // probing common positions relative to the running binary. Empty string
 // if we can't find it (e.g. binary moved standalone).
@@ -130,11 +190,13 @@ func scanSkillsDir(dir, layer string) []skillInfo {
 		name := e.Name()
 		if e.IsDir() {
 			path := filepath.Join(dir, name)
+			skillFile := filepath.Join(path, "SKILL.md")
 			out = append(out, skillInfo{
 				Name:        name,
-				Description: firstNonHeadingLine(filepath.Join(path, "SKILL.md")),
+				Description: firstNonHeadingLine(skillFile),
 				Location:    path,
 				Type:        layer,
+				Kind:        skillKind(skillFile),
 			})
 			continue
 		}
@@ -150,38 +212,68 @@ func scanSkillsDir(dir, layer string) []skillInfo {
 			Description: firstNonHeadingLine(path),
 			Location:    path,
 			Type:        layer,
+			Kind:        skillKind(path),
 		})
 	}
 	return out
 }
 
-// firstNonHeadingLine returns the first non-empty, non-#-prefixed line
-// of a markdown file – used as a one-line description. Skips a leading
-// YAML frontmatter block (`---` ... `---`) and prefers a `description:`
-// frontmatter key when present.
+// skillKind reads the YAML frontmatter `type:` field. Returns "" when
+// the file has no frontmatter, no type field, or any parse error.
+//
+// Convention seen in the codebase:
+//   - "skill" or empty → atomic capability (single-step "do X")
+//   - "protocol"       → multi-step procedure
+//   - "suite"          → orchestrator that loads other skills
+func skillKind(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	frontmatter, _ := splitFrontmatter(data)
+	if frontmatter == "" {
+		return ""
+	}
+	var fm struct {
+		Type string `yaml:"type"`
+	}
+	if err := yaml.Unmarshal([]byte(frontmatter), &fm); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(fm.Type)
+}
+
+// firstNonHeadingLine returns a one-line description for the skill.
+//
+// Strategy:
+//  1. Parse the YAML frontmatter via gopkg.in/yaml.v3, which correctly
+//     handles multi-line scalars like `description: |\n  ...`. The
+//     previous line-by-line scanner returned literally `"|"` for these
+//     skills, which is what the user saw on the Skills page.
+//  2. If that yields a description, normalise to a single line: collapse
+//     whitespace and clip overly long blocks at ~200 chars so the card
+//     stays a card.
+//  3. If no frontmatter description, fall back to the first non-blank,
+//     non-# markdown line of the body.
 func firstNonHeadingLine(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	lines := strings.Split(string(data), "\n")
 
-	// Detect leading frontmatter and harvest description if it's there.
-	body := lines
-	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
-		for i := 1; i < len(lines); i++ {
-			line := lines[i]
-			if strings.TrimSpace(line) == "---" {
-				body = lines[i+1:]
-				break
-			}
-			if strings.HasPrefix(line, "description:") {
-				return strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+	frontmatter, body := splitFrontmatter(data)
+	if frontmatter != "" {
+		var fm struct {
+			Description string `yaml:"description"`
+		}
+		if err := yaml.Unmarshal([]byte(frontmatter), &fm); err == nil {
+			if d := normaliseDescription(fm.Description); d != "" {
+				return d
 			}
 		}
 	}
 
-	for _, line := range body {
+	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -189,6 +281,45 @@ func firstNonHeadingLine(path string) string {
 		return trimmed
 	}
 	return ""
+}
+
+// splitFrontmatter pulls the leading "---\n…\n---\n" block off a markdown
+// file. Returns ("", body) when no frontmatter is present.
+func splitFrontmatter(data []byte) (frontmatter, body string) {
+	content := string(data)
+	if !strings.HasPrefix(strings.TrimLeft(content, " \t\r\n"), "---") {
+		return "", content
+	}
+	// Strip optional leading whitespace + the opening "---".
+	trimmed := strings.TrimLeft(content, " \t\r\n")
+	rest := trimmed[3:]
+	endIdx := strings.Index(rest, "\n---")
+	if endIdx < 0 {
+		return "", content
+	}
+	return rest[:endIdx], rest[endIdx+4:]
+}
+
+// normaliseDescription collapses whitespace in a multi-line description
+// to a single readable line and clips it so the UI card doesn't grow
+// unbounded.
+func normaliseDescription(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	// Collapse runs of whitespace (including newlines) into single spaces.
+	s = strings.Join(strings.Fields(s), " ")
+	const maxLen = 240
+	if len(s) > maxLen {
+		// Trim at the last space before maxLen so we don't cut a word in half.
+		head := s[:maxLen]
+		if i := strings.LastIndex(head, " "); i > 0 {
+			head = head[:i]
+		}
+		s = head + "…"
+	}
+	return s
 }
 
 func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {

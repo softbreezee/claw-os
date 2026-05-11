@@ -47,10 +47,14 @@ export interface SkillInfo {
   name: string;
   description: string;
   location: string;
-  type: string;     // "builtin" | "user" | "agent"
+  type: string;     // layer: "builtin" | "user" | "agent"
   builtin?: boolean; // true when shipped with the binary
   // Set when the skill lives in an agent workspace; absent for shared skills.
   owner?: string;
+  // From SKILL.md frontmatter `type:` — "skill" | "protocol" | "suite" | "" (empty = atomic).
+  // Drives the Skills page badge: "protocol" / "suite" surface as
+  // distinct labels so users can spot orchestrators at a glance.
+  kind?: string;
 }
 
 export interface PluginInfo {
@@ -470,6 +474,21 @@ export async function getSkills(): Promise<SkillInfo[]> {
   return res.json();
 }
 
+export interface SkillDetail {
+  name: string;
+  content: string;
+  location: string;
+}
+
+// getSkill returns the full SKILL.md content for a single skill,
+// used by the Skills page detail dialog. Skill name with slashes
+// or other URL-unsafe chars is encoded.
+export async function getSkill(name: string): Promise<SkillDetail> {
+  const res = await fetch(`/api/skills/${encodeURIComponent(name)}`);
+  if (!res.ok) throw new Error(`fetch skill failed: ${res.status}`);
+  return res.json();
+}
+
 export async function deleteSkill(name: string) {
   const res = await fetch(`/api/skills/${name}`, {
     method: "DELETE",
@@ -538,6 +557,43 @@ export async function updateCronJob(id: string, job: Partial<CronJobInfo>) {
 
 export async function deleteCronJob(id: string) {
   const res = await fetch(`/api/cron/${id}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
+// Apps
+export interface AppEntry {
+  name: string;
+  url: string;
+  description?: string;
+}
+
+export async function getApps(): Promise<AppEntry[]> {
+  const res = await fetch("/api/apps");
+  return res.json();
+}
+
+export async function createApp(app: AppEntry) {
+  const res = await fetch("/api/apps", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(app),
+  });
+  return res.json();
+}
+
+export async function updateApp(oldName: string, app: AppEntry) {
+  const res = await fetch(`/api/apps/${encodeURIComponent(oldName)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(app),
+  });
+  return res.json();
+}
+
+export async function deleteApp(name: string) {
+  const res = await fetch(`/api/apps/${encodeURIComponent(name)}`, {
     method: "DELETE",
   });
   return res.json();

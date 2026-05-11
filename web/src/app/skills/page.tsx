@@ -14,6 +14,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -22,13 +29,17 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sparkles, FolderOpen, Trash2, Download, MoveRight, Check } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   getSkills,
+  getSkill,
   deleteSkill,
   moveSkill,
   getStatus,
   type SkillInfo,
   type AgentInfo,
+  type SkillDetail,
 } from "@/lib/api";
 
 export default function SkillsPage() {
@@ -37,6 +48,14 @@ export default function SkillsPage() {
   const [loading, setLoading] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
+  // Detail dialog: click any skill card to view its full SKILL.md.
+  // We track three states:
+  //   - selected:    summary card the user clicked (shown in dialog header)
+  //   - detail:      full content fetched on open (null while loading)
+  //   - detailError: surfaced if the GET fails
+  const [selected, setSelected] = useState<SkillInfo | null>(null);
+  const [detail, setDetail] = useState<SkillDetail | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   const fetchSkills = () => {
     setLoading(true);
@@ -81,6 +100,39 @@ export default function SkillsPage() {
     fetchSkills();
   };
 
+  // Open the detail dialog and fetch the full SKILL.md content.
+  // The fetch is fire-and-forget — the dialog opens immediately with
+  // a loading state, then renders content (or an error) when the
+  // network resolves.
+  const openDetail = async (skill: SkillInfo) => {
+    setSelected(skill);
+    setDetail(null);
+    setDetailError(null);
+    try {
+      const d = await getSkill(skill.name);
+      setDetail(d);
+    } catch (e) {
+      setDetailError((e as Error)?.message || "Failed to load skill");
+    }
+  };
+
+  const closeDetail = () => {
+    setSelected(null);
+    setDetail(null);
+    setDetailError(null);
+  };
+
+  // Strip leading YAML frontmatter from SKILL.md before rendering. We
+  // already display the metadata (name / description / location) in
+  // the dialog header, so duplicating the raw `--- ... ---` block
+  // would just be visual noise.
+  const stripFrontmatter = (md: string): string => {
+    if (!md.trimStart().startsWith("---")) return md;
+    const idx = md.indexOf("\n---", md.indexOf("---") + 3);
+    if (idx < 0) return md;
+    return md.slice(idx + 4).replace(/^\s*\n/, "");
+  };
+
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
@@ -119,7 +171,16 @@ export default function SkillsPage() {
           {skills.map((skill) => (
             <div
               key={skill.name}
-              className="group rounded-lg border border-border bg-card p-5 transition-colors hover:bg-muted/50"
+              role="button"
+              tabIndex={0}
+              onClick={() => openDetail(skill)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  openDetail(skill);
+                }
+              }}
+              className="group rounded-lg border border-border bg-card p-5 transition-colors hover:bg-muted/50 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40"
             >
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-2.5">
@@ -143,11 +204,31 @@ export default function SkillsPage() {
                           {skill.owner}
                         </Badge>
                       )}
+                      {/* Kind badge: surfaces orchestrator-style skills
+                          (protocol / suite) so they're recognizable at
+                          a glance. Atomic skills (kind="" or "skill")
+                          don't get an extra badge. */}
+                      {skill.kind === "suite" && (
+                        <Badge className="text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30 hover:bg-amber-500/20">
+                          编排器
+                        </Badge>
+                      )}
+                      {skill.kind === "protocol" && (
+                        <Badge className="text-[10px] bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30 hover:bg-violet-500/20">
+                          协议
+                        </Badge>
+                      )}
                     </div>
                   </div>
                 </div>
                 {!skill.builtin && (
-                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  // stopPropagation on every action button so the
+                  // outer card's onClick (open detail) doesn't fire
+                  // when the user is using the move/delete affordance.
+                  <div
+                    className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <DropdownMenu>
                       <DropdownMenuTrigger
                         className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
@@ -220,6 +301,61 @@ export default function SkillsPage() {
           ))}
         </div>
       )}
+
+      {/* Skill detail dialog — opens when a card is clicked. */}
+      <Dialog open={!!selected} onOpenChange={(open) => { if (!open) closeDetail(); }}>
+        <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <span>{selected?.name}</span>
+              {selected?.builtin && (
+                <Badge className="text-[10px] bg-primary/10 text-primary hover:bg-primary/20">builtin</Badge>
+              )}
+              {selected && !selected.builtin && (
+                <Badge variant="outline" className="text-[10px]">{selected.type || "skill"}</Badge>
+              )}
+              {selected?.owner && (
+                <Badge variant="secondary" className="text-[10px]">{selected.owner}</Badge>
+              )}
+              {selected?.kind === "suite" && (
+                <Badge className="text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30 hover:bg-amber-500/20">编排器</Badge>
+              )}
+              {selected?.kind === "protocol" && (
+                <Badge className="text-[10px] bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30 hover:bg-violet-500/20">协议</Badge>
+              )}
+            </DialogTitle>
+            {selected?.description && (
+              <DialogDescription className="text-sm text-muted-foreground">
+                {selected.description}
+              </DialogDescription>
+            )}
+            {selected?.location && (
+              <p className="text-[11px] font-mono text-muted-foreground/60 truncate">
+                {selected.location}
+              </p>
+            )}
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto -mx-6 px-6 mt-2">
+            {detailError ? (
+              <p className="text-sm text-destructive">{detailError}</p>
+            ) : !detail ? (
+              <div className="space-y-2 py-4">
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-5/6" />
+                <Skeleton className="h-4 w-4/6" />
+              </div>
+            ) : (
+              <article className="prose prose-sm dark:prose-invert max-w-none prose-headings:scroll-mt-4 prose-pre:text-[12px]">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {stripFrontmatter(detail.content)}
+                </ReactMarkdown>
+              </article>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
