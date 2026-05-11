@@ -42,8 +42,39 @@ func (m *Memory) SetPGStore(store interface {
 }
 
 // NewMemory creates a new memory manager.
+//
+// Defensive against empty / relative workspace paths: a blank workspace
+// would make memoryPath() return the bare string "MEMORY.md", which then
+// gets written relative to whatever the daemon's startup cwd happens to
+// be — historically that meant MEMORY.md polluting the developer's repo
+// root when fastclaw was launched from a source checkout. Always anchor
+// the workspace to an absolute path; if the caller provided nothing,
+// fall back to a clearly-marked orphan dir under ~/.fastclaw so the
+// data is still recoverable but never lands somewhere surprising.
 func NewMemory(workspace string) *Memory {
+	if strings.TrimSpace(workspace) == "" {
+		fallback := orphanWorkspaceDir()
+		slog.Warn("Memory created with empty workspace; using fallback to avoid cwd pollution",
+			"fallback", fallback)
+		workspace = fallback
+	}
+	if abs, err := filepath.Abs(workspace); err == nil {
+		workspace = abs
+	}
 	return &Memory{workspace: workspace}
+}
+
+// orphanWorkspaceDir returns ~/.fastclaw/agents/_orphan/agent — a
+// quarantine location for Memory instances built without a real
+// workspace. We don't propagate the error from UserHomeDir because
+// SaveMemory will surface any real I/O failure later; the only goal
+// here is "absolute path that is NOT the process cwd".
+func orphanWorkspaceDir() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".fastclaw", "agents", "_orphan", "agent")
+	}
+	// Last resort: temp dir is still better than cwd.
+	return filepath.Join(os.TempDir(), "fastclaw-orphan-agent")
 }
 
 // memoryPath returns the path to MEMORY.md.

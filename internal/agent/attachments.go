@@ -163,17 +163,31 @@ func buildUserMessage(msg bus.InboundMessage, model string) provider.Message {
 // textWithAttachmentBreadcrumb appends a structured listing of the
 // attachments to the user's text so a non-vision LLM is at least aware
 // they exist. Format is intentionally machine-friendly so we can
-// reference indices later in tool calls (e.g. forward_attachments).
+// reference indices later in tool calls.
+//
+// Critically, we expose each attachment's REAL on-disk absolute path
+// (typically ~/.fastclaw/uploads/<sha>.<ext>) — without it the agent
+// has no way to read non-image attachments (md / pdf / csv …) and
+// historically guessed `<workspace>/<filename>`, which never resolves.
+//
+// Behaviour by attachment type:
+//   - Documents (md, pdf, txt, json, csv, …) → tell the model to read the
+//     path directly via `read_file`.
+//   - Images on a non-vision model → tell the model to delegate to a
+//     vision-capable sub-agent via `spawn_subagent(forward_attachments=true)`.
 //
 // Example output:
 //
-//   What's in this picture?
+//   分析一下这份附件
 //
 //   [Attached files]
-//   [0] image/png — diagram.png (124 KB)
-//   [1] image/jpeg — photo.jpg (480 KB)
+//   [0] text/markdown — analysis.md (4 KB)
+//       path: /Users/liuyang42/.fastclaw/uploads/ab12…cd.md
+//   [1] image/png — diagram.png (124 KB)
+//       path: /Users/liuyang42/.fastclaw/uploads/ef34…56.png
 //
-//   Note: you cannot see images directly. To analyse them, use
+//   To read documents, call read_file with the path above.
+//   To analyse images, this model cannot see them directly — call
 //   spawn_subagent with a vision-capable agent and forward_attachments=true.
 func textWithAttachmentBreadcrumb(text string, atts []bus.Attachment) string {
 	var b strings.Builder
@@ -182,17 +196,33 @@ func textWithAttachmentBreadcrumb(text string, atts []bus.Attachment) string {
 		b.WriteString("\n\n")
 	}
 	b.WriteString("[Attached files]\n")
+	var hasDoc, hasImage bool
 	for i, a := range atts {
 		mime := a.MimeType
 		if mime == "" {
 			mime = "application/octet-stream"
 		}
 		fmt.Fprintf(&b, "[%d] %s — %s (%d KB)\n", i, mime, a.Name, a.Size/1024)
+		if a.Path != "" {
+			fmt.Fprintf(&b, "    path: %s\n", a.Path)
+		}
+		if a.IsImage() {
+			hasImage = true
+		} else {
+			hasDoc = true
+		}
 	}
-	b.WriteString("\nNote: this model cannot see images directly. To analyse them, ")
-	b.WriteString("call spawn_subagent with a vision-capable agent ")
-	b.WriteString("and forward_attachments=true.")
-	return b.String()
+	b.WriteString("\n")
+	if hasDoc {
+		b.WriteString("To read document attachments, call read_file with the absolute `path` shown above ")
+		b.WriteString("(do NOT guess a workspace-relative name).\n")
+	}
+	if hasImage {
+		b.WriteString("This model cannot see images directly. To analyse them, ")
+		b.WriteString("call spawn_subagent with a vision-capable agent ")
+		b.WriteString("and forward_attachments=true.\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // flattenUserContent splits a user provider.Message back into a text

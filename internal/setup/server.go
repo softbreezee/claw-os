@@ -198,6 +198,11 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("PUT /api/apps/{name}", s.handleUpdateApp)
 	mux.HandleFunc("DELETE /api/apps/{name}", s.handleDeleteApp)
 
+	// Model Catalog (context window / compaction thresholds)
+	mux.HandleFunc("GET /api/model-catalog", s.handleGetModelCatalog)
+	mux.HandleFunc("PUT /api/model-catalog", s.handleSaveModelCatalog)
+	mux.HandleFunc("POST /api/model-catalog/reload", s.handleReloadModelCatalog)
+
 	// OpenAI-compatible API and WebSocket gateway
 	if s.apiServer != nil {
 		s.apiServer.RegisterRoutes(mux)

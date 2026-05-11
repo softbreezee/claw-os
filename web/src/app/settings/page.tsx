@@ -14,8 +14,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Database, Webhook, Save, Check } from "lucide-react";
-import { getConfig, updateConfig, type ConfigResponse } from "@/lib/api";
+import { Database, Webhook, Save, Check, Cpu, RotateCw } from "lucide-react";
+import { getConfig, updateConfig, type ConfigResponse, getModelCatalog, saveModelCatalog, reloadModelCatalog, type ModelCatalog } from "@/lib/api";
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -29,20 +29,71 @@ export default function SettingsPage() {
   const [webhookToken, setWebhookToken] = useState("");
   const [webhookPath, setWebhookPath] = useState("/hooks");
 
+  // Model Catalog
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [catalogJSON, setCatalogJSON] = useState("");
+  const [catalogSaving, setCatalogSaving] = useState(false);
+  const [catalogSaved, setCatalogSaved] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
+  const [catalogReloading, setCatalogReloading] = useState(false);
+
   useEffect(() => {
     setLoading(true);
-    getConfig()
-      .then((cfg) => {
+    Promise.all([
+      getConfig().then((cfg) => {
         setConfig(cfg);
         setStorageType(cfg.storage?.type || "file");
         setDsn(cfg.storage?.dsn || "");
         setWebhookEnabled(cfg.hooks?.enabled || false);
         setWebhookToken(cfg.hooks?.token || "");
         setWebhookPath(cfg.hooks?.path || "/hooks");
-      })
-      .catch(() => {})
+      }),
+      getModelCatalog().then((cat) => {
+        setCatalog(cat);
+        setCatalogJSON(JSON.stringify(cat, null, 2));
+      }).catch(() => {}),
+    ]).catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  const handleSaveCatalog = async () => {
+    setCatalogSaving(true);
+    setCatalogError("");
+    try {
+      const parsed = JSON.parse(catalogJSON) as ModelCatalog;
+      const res = await saveModelCatalog(parsed);
+      if (res.ok) {
+        setCatalog(parsed);
+        setCatalogSaved(true);
+        setTimeout(() => setCatalogSaved(false), 2000);
+      } else {
+        setCatalogError(res.error || "Save failed");
+      }
+    } catch (e) {
+      if (e instanceof SyntaxError) {
+        setCatalogError("Invalid JSON format");
+      } else {
+        setCatalogError(String(e));
+      }
+    } finally {
+      setCatalogSaving(false);
+    }
+  };
+
+  const handleReloadCatalog = async () => {
+    setCatalogReloading(true);
+    try {
+      await reloadModelCatalog();
+      const fresh = await getModelCatalog();
+      setCatalog(fresh);
+      setCatalogJSON(JSON.stringify(fresh, null, 2));
+      setCatalogError("");
+    } catch {
+      setCatalogError("Reload failed");
+    } finally {
+      setCatalogReloading(false);
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -182,6 +233,72 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Model Catalog */}
+      <div className="rounded-lg border border-border bg-card">
+        <div className="p-5 pb-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <Cpu className="h-4 w-4 text-amber-500" />
+                <h3 className="font-medium">Model Catalog</h3>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Context window & compaction thresholds per model. Saves to{" "}
+                <code className="text-xs bg-muted px-1 rounded">~/.fastclaw/model-catalog.json</code>.
+                Changes take effect after Save and Reload.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="px-5 pb-5 space-y-4">
+          <div className="space-y-2">
+            <Label className="text-xs text-muted-foreground">JSON Editor</Label>
+            <textarea
+              value={catalogJSON}
+              onChange={(e) => setCatalogJSON(e.target.value)}
+              rows={18}
+              spellCheck={false}
+              className="w-full rounded-md border border-border bg-muted/30 px-3 py-2 font-mono text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+          {catalogError && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {catalogError}
+            </div>
+          )}
+          <div className="flex items-center gap-3">
+            <Button
+              onClick={handleSaveCatalog}
+              disabled={catalogSaving}
+              variant={catalogSaved ? "outline" : "default"}
+              size="sm"
+              className={catalogSaved ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400" : ""}
+            >
+              {catalogSaved ? (
+                <>
+                  <Check className="h-3.5 w-3.5 mr-1.5" />
+                  Saved
+                </>
+              ) : (
+                <>
+                  <Save className="h-3.5 w-3.5 mr-1.5" />
+                  {catalogSaving ? "Saving..." : "Save Catalog"}
+                </>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReloadCatalog}
+              disabled={catalogReloading}
+            >
+              <RotateCw className={`h-3.5 w-3.5 mr-1.5 ${catalogReloading ? "animate-spin" : ""}`} />
+              {catalogReloading ? "Reloading..." : "Reload"}
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );

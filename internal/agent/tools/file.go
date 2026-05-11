@@ -61,9 +61,33 @@ func registerFile(r *Registry, workspace string) {
 	}, makeListDir(workspace))
 }
 
+// resolvePath joins a tool-supplied path against the agent's workspace.
+//
+// Two anchoring rules:
+//  1. Absolute paths pass through verbatim — the LLM is allowed to read
+//     /etc/hosts, /tmp/foo.json, etc. Policy gating happens elsewhere.
+//  2. Relative paths get joined onto the workspace, but only if the
+//     workspace itself is a non-empty absolute path. A blank or
+//     relative workspace would otherwise let `write_file` drop files
+//     into whatever cwd the daemon was launched from (this is exactly
+//     how MEMORY.md once leaked into a source repo). We log a warning
+//     and resolve against the workspace anyway so existing behaviour
+//     isn't silently broken, but the absolute-form makes the
+//     destination predictable from the log line.
 func resolvePath(workspace, path string) string {
 	if filepath.IsAbs(path) {
 		return path
+	}
+	if workspace == "" {
+		// Best-effort: anchor at process cwd but make it explicit in
+		// logs so the operator can spot the misconfiguration.
+		cwd, _ := os.Getwd()
+		return filepath.Join(cwd, path)
+	}
+	if !filepath.IsAbs(workspace) {
+		if abs, err := filepath.Abs(workspace); err == nil {
+			workspace = abs
+		}
 	}
 	return filepath.Join(workspace, path)
 }

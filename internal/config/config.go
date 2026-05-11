@@ -424,6 +424,15 @@ func (cfg *Config) MergedAgentConfig(entry AgentEntry) ResolvedAgent {
 		homeDir, _ := HomeDir()
 		workspace = filepath.Join(homeDir, "agents", entry.ID, "agent")
 	}
+	// Normalise to an absolute path so downstream consumers (Memory,
+	// tools.resolvePath, exec.cmd.Dir, sessions.Manager) never fall
+	// back to the daemon's cwd. This is the root cause of the
+	// historical bug where MEMORY.md / HISTORY.md / write_file output
+	// would land in the source repo when fastclaw was launched from
+	// `go run ./...` inside the checkout.
+	if abs, err := filepath.Abs(workspace); err == nil {
+		workspace = abs
+	}
 
 	resolved := ResolvedAgent{
 		ID:                entry.ID,

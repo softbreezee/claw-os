@@ -598,3 +598,36 @@ export async function deleteApp(name: string) {
   });
   return res.json();
 }
+
+// Model Catalog
+export interface ModelCatalogModelInfo {
+  contextWindow: number;
+  softThreshold: number;
+  hardThreshold: number;
+  description: string;
+}
+
+export interface ModelCatalog {
+  models: Record<string, ModelCatalogModelInfo>;
+}
+
+export async function getModelCatalog(): Promise<ModelCatalog> {
+  const res = await fetch("/api/model-catalog");
+  return res.json();
+}
+
+export async function saveModelCatalog(catalog: ModelCatalog): Promise<{ ok: boolean; message?: string; error?: string }> {
+  const res = await fetch("/api/model-catalog", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(catalog),
+  });
+  return res.json();
+}
+
+export async function reloadModelCatalog(): Promise<{ ok: boolean; message?: string; error?: string }> {
+  const res = await fetch("/api/model-catalog/reload", {
+    method: "POST",
+  });
+  return res.json();
+}

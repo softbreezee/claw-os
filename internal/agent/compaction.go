@@ -10,11 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fastclaw-ai/fastclaw/internal/modelcatalog"
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
 )
 
 const (
-	// DefaultTokenThreshold is the default threshold at which compaction triggers (80K tokens).
+	// DefaultTokenThreshold is the fallback token count when the model is not
+	// found in the model catalog. At 80K it is very conservative.
 	DefaultTokenThreshold = 80000
 	// PruneTurnAge is the number of recent turns to keep intact; older messages get pruned.
 	PruneTurnAge = 20
@@ -78,11 +80,22 @@ type CompactResult struct {
 // using the LLM and write full history to a log file.
 func CompactMessages(ctx context.Context, messages []provider.Message, systemPrompt string, workspace string, prov provider.Provider, model string) (*CompactResult, error) {
 	tokens := EstimateTokensWithSystem(systemPrompt, messages)
-	if tokens < DefaultTokenThreshold {
+	th := modelcatalog.LookupThreshold(model)
+	softThreshold := th.Soft
+	hardThreshold := th.Hard
+
+	// If below soft threshold, everything is fine.
+	if tokens < softThreshold {
 		return &CompactResult{Messages: messages}, nil
 	}
 
-	slog.Info("context compaction triggered", "tokens", tokens, "threshold", DefaultTokenThreshold, "message_count", len(messages))
+	slog.Info("context compaction triggered",
+		"tokens", tokens,
+		"soft_threshold", softThreshold,
+		"hard_threshold", hardThreshold,
+		"model", model,
+		"message_count", len(messages),
+	)
 
 	// Write full history to log file before any modifications
 	logFile, err := writeHistoryLog(messages, workspace)
@@ -96,7 +109,8 @@ func CompactMessages(ctx context.Context, messages []provider.Message, systemPro
 
 	slog.Info("after pruning", "tokens_before", tokens, "tokens_after", prunedTokens)
 
-	if prunedTokens < DefaultTokenThreshold {
+	// If between soft and hard threshold, pruning alone is sufficient.
+	if prunedTokens < hardThreshold {
 		return &CompactResult{
 			Messages: pruned,
 			Pruned:   true,
@@ -104,7 +118,8 @@ func CompactMessages(ctx context.Context, messages []provider.Message, systemPro
 		}, nil
 	}
 
-	// Step 2: Compression - summarize older messages
+	// Step 2: Compression - summarize older messages (above hard threshold).
+	// This MUST bring us under hardThreshold; we cannot risk a 400.
 	compressed, err := compressOlderMessages(ctx, pruned, prov, model)
 	if err != nil {
 		slog.Warn("compression failed, using pruned messages", "error", err)
