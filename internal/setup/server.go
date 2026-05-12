@@ -53,6 +53,8 @@ type AgentHandle interface {
 	WebChatHistory(sessionId string) []map[string]any
 	WebChatSessions() []map[string]string
 	DeleteWebSession(sessionId string) error
+	// SessionContextInfo returns token usage stats for a web session.
+	SessionContextInfo(sessionId string) agent.ContextInfo
 	// WorkspacePath returns the on-disk directory the agent uses for
 	// scratch files, generated artifacts, and the SOUL.md / MEMORY.md
 	// markdown files. Used by the file-serving endpoints so the chat
@@ -156,6 +158,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/chat/history", s.handleChatHistory)
 	mux.HandleFunc("GET /api/chat/sessions", s.handleChatSessions)
 	mux.HandleFunc("DELETE /api/chat/sessions", s.handleDeleteChatSession)
+	mux.HandleFunc("GET /api/chat/context-info", s.handleChatContextInfo)
 
 	// File serving (chat attachments preview + agent-generated artifacts)
 	mux.HandleFunc("GET /api/files", s.handleServeFile)

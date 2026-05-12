@@ -599,6 +599,29 @@ export async function deleteApp(name: string) {
   return res.json();
 }
 
+// Session Context Info
+export interface SessionContextInfo {
+  currentTokens: number;
+  contextWindow: number;
+  softThreshold: number;
+  hardThreshold: number;
+  messageCount: number;
+  compactionCount: number;
+  modelId: string;
+}
+
+export async function getSessionContextInfo(agentId: string, sessionId: string): Promise<SessionContextInfo | null> {
+  try {
+    const res = await fetch(
+      `/api/chat/context-info?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`
+    );
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
 // Model Catalog
 export interface ModelCatalogModelInfo {
   contextWindow: number;

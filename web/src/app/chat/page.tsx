@@ -15,11 +15,13 @@ import {
   deleteChatSession,
   fileURL,
   openWorkspace,
+  getSessionContextInfo,
   type AgentInfo,
   type ChatAttachment,
   type ChatHistoryMessage,
   type ChatStreamEvent,
   type SkillInfo,
+  type SessionContextInfo,
 } from "@/lib/api";
 import {
   DropdownMenu,
@@ -270,6 +272,9 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Context window usage info — polled every 10s and after each message round-trip.
+  const [contextInfo, setContextInfo] = useState<SessionContextInfo | null>(null);
+
   // Mutable mirror of `runtimes` so the SSE callback (long-lived closure)
   // can read the latest state without stale-closure bugs and keep the
   // streaming accumulators (curCalls / curContent) outside React state.
@@ -367,6 +372,21 @@ export default function ChatPage() {
     if (!selectedAgent) return;
     loadSessions(selectedAgent);
   }, [selectedAgent, loadSessions]);
+
+  // Poll context info every 10s; also refresh immediately when (agent, session) changes
+  // or when a send completes (sending flips false→true→false).
+  useEffect(() => {
+    if (!selectedAgent || !sessionId) return;
+    let alive = true;
+    const refresh = () => {
+      getSessionContextInfo(selectedAgent, sessionId).then((info) => {
+        if (alive) setContextInfo(info);
+      });
+    };
+    refresh();
+    const timer = setInterval(refresh, 10_000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [selectedAgent, sessionId, sending]); // re-trigger when sending flips so we get fresh stats after each turn
 
   // Load history when (agent, session) changes – but only if there is no
   // live runtime already (i.e. don't clobber an in-flight stream when the
@@ -926,6 +946,11 @@ export default function ChatPage() {
                 {agents.map((a) => <option key={a.id} value={a.id}>{a.id}</option>)}
               </select>
             )}
+            {/* Context window usage ring */}
+            {contextInfo && contextInfo.contextWindow > 0 && (
+              <ContextRing info={contextInfo} />
+            )}
+
             {/* Open the agent's workspace directory in the host file
                 explorer. Shows briefly to confirm the request was
                 received — actual GUI launch happens server-side. */}
@@ -1254,6 +1279,103 @@ export default function ChatPage() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Context Ring ─────────────────────────────────────────────────────────────
+// A small SVG donut chart that shows how much of the model's context window
+// is in use. Color-coded: green (<70%), yellow (70-92%), red (>92%).
+// Hover shows a tooltip with detailed stats.
+
+function ContextRing({ info }: { info: SessionContextInfo }) {
+  const [showTip, setShowTip] = useState(false);
+
+  const ratio = info.contextWindow > 0 ? info.currentTokens / info.contextWindow : 0;
+  const pct = Math.min(ratio * 100, 100);
+
+  // Color thresholds match soft/hard compaction boundaries
+  const softRatio = info.contextWindow > 0 ? info.softThreshold / info.contextWindow : 0.7;
+  const hardRatio = info.contextWindow > 0 ? info.hardThreshold / info.contextWindow : 0.92;
+
+  const color =
+    ratio >= hardRatio ? "#ef4444" :   // red — above hard threshold
+    ratio >= softRatio ? "#f59e0b" :   // amber — above soft threshold
+    "#22c55e";                          // green — healthy
+
+  // SVG donut: r=8, circumference = 2π×8 ≈ 50.27
+  const R = 8;
+  const C = 2 * Math.PI * R;
+  const dash = (pct / 100) * C;
+
+  const fmtK = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+
+  return (
+    <div className="relative flex items-center" onMouseEnter={() => setShowTip(true)} onMouseLeave={() => setShowTip(false)}>
+      {/* Ring icon */}
+      <div className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-muted/50 transition-colors cursor-default">
+        <svg width="20" height="20" viewBox="0 0 20 20">
+          {/* Track */}
+          <circle
+            cx="10" cy="10" r={R}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            className="text-muted-foreground/20"
+          />
+          {/* Progress arc */}
+          <circle
+            cx="10" cy="10" r={R}
+            fill="none"
+            stroke={color}
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeDasharray={`${dash} ${C}`}
+            strokeDashoffset={C / 4} // start at top (12 o'clock)
+            style={{ transition: "stroke-dasharray 0.4s ease" }}
+          />
+        </svg>
+      </div>
+
+      {/* Tooltip */}
+      {showTip && (
+        <div className="absolute right-0 top-full mt-2 z-50 w-64 rounded-xl border border-border bg-popover shadow-lg p-3 text-xs space-y-2">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-foreground">Context Usage</span>
+            <span className="font-mono font-bold" style={{ color }}>{pct.toFixed(1)}%</span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all"
+              style={{ width: `${pct}%`, backgroundColor: color }}
+            />
+          </div>
+
+          {/* Stats grid */}
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-muted-foreground">
+            <span>Used</span>
+            <span className="font-mono text-foreground text-right">{fmtK(info.currentTokens)} tk</span>
+            <span>Context window</span>
+            <span className="font-mono text-foreground text-right">{fmtK(info.contextWindow)} tk</span>
+            <span>Soft threshold</span>
+            <span className="font-mono text-right">{fmtK(info.softThreshold)} tk</span>
+            <span>Hard threshold</span>
+            <span className="font-mono text-right">{fmtK(info.hardThreshold)} tk</span>
+            <span>Messages</span>
+            <span className="font-mono text-foreground text-right">{info.messageCount}</span>
+            <span>Compactions</span>
+            <span className="font-mono text-foreground text-right">{info.compactionCount}</span>
+          </div>
+
+          {/* Model */}
+          <div className="border-t border-border pt-2 font-mono text-[10px] text-muted-foreground/60 truncate">
+            {info.modelId}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/mcp"
+	"github.com/fastclaw-ai/fastclaw/internal/modelcatalog"
 	"github.com/fastclaw-ai/fastclaw/internal/privacy"
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
 	"github.com/fastclaw-ai/fastclaw/internal/session"
@@ -52,6 +53,8 @@ type Agent struct {
 	turnCount         int
 	engine            *sdkEngine
 	costTracker       *costtracker.Tracker
+	compactionCount   int // number of times the context has been compacted this session
+	compactionMu      sync.Mutex
 }
 
 // getProvider safely reads the current LLM provider.
@@ -512,6 +515,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		// Replace session messages with compacted version
 		sess.ReplaceMessages(compactResult.Messages)
 		sessionMsgs = compactResult.Messages
+		a.compactionMu.Lock()
+		a.compactionCount++
+		a.compactionMu.Unlock()
 		slog.Info("context compacted", "agent", a.name, "log_file", compactResult.LogFile)
 		// Evict stale FTS entries for this chat and re-index surviving messages.
 		if a.ftsStore != nil {
@@ -705,6 +711,66 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	a.runPostTurn(ctx, messages, totalToolCalls)
 	slog.Warn("max tool iterations reached", "agent", a.name, "max", a.maxToolIterations)
 	return "I've reached the maximum number of tool iterations. Here's what I have so far."
+}
+
+// ContextInfo holds context window usage stats for the current web session.
+type ContextInfo struct {
+	CurrentTokens   int    `json:"currentTokens"`
+	ContextWindow   int    `json:"contextWindow"`
+	SoftThreshold   int    `json:"softThreshold"`
+	HardThreshold   int    `json:"hardThreshold"`
+	MessageCount    int    `json:"messageCount"`
+	CompactionCount int    `json:"compactionCount"`
+	ModelID         string `json:"modelId"`
+}
+
+// SessionContextInfo returns current token usage statistics for a web session.
+func (a *Agent) SessionContextInfo(sessionId string) ContextInfo {
+	if sessionId == "" {
+		sessionId = "web-ui"
+	}
+	sess := a.sessions.Get("web", sessionId)
+	msgs := sess.GetMessages()
+
+	systemPrompt := a.ctxBuilder.BuildSystemPrompt()
+	tokens := EstimateTokensWithSystem(systemPrompt, msgs)
+
+	th := modelcatalog.LookupThreshold(a.model)
+
+	// Resolve context window size from catalog
+	contextWindow := 0
+	cat := modelcatalog.Get()
+	cleanModel := a.model
+	if idx := len(cleanModel) - 1; idx >= 0 {
+		// Strip provider prefix
+		for i := len(cleanModel) - 1; i >= 0; i-- {
+			if cleanModel[i] == '/' {
+				cleanModel = cleanModel[i+1:]
+				break
+			}
+		}
+	}
+	if info, ok := cat.Models[cleanModel]; ok {
+		contextWindow = info.ContextWindow
+	}
+	// If not in catalog, derive from soft threshold / ratio
+	if contextWindow == 0 && th.Soft > 0 {
+		contextWindow = int(float64(th.Soft) / modelcatalog.SoftThresholdRatio)
+	}
+
+	a.compactionMu.Lock()
+	compactionCount := a.compactionCount
+	a.compactionMu.Unlock()
+
+	return ContextInfo{
+		CurrentTokens:   tokens,
+		ContextWindow:   contextWindow,
+		SoftThreshold:   th.Soft,
+		HardThreshold:   th.Hard,
+		MessageCount:    len(msgs),
+		CompactionCount: compactionCount,
+		ModelID:         a.model,
+	}
 }
 
 // runPostTurn fires PostTurn hooks and handles auto-persist and skills learning.

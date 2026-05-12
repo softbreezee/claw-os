@@ -322,6 +322,29 @@ func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, sessions)
 }
 
+func (s *Server) handleChatContextInfo(w http.ResponseWriter, r *http.Request) {
+	if s.agentProvider == nil {
+		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{"error": "gateway is not running"})
+		return
+	}
+
+	agentID := r.URL.Query().Get("agentId")
+	sessionID := r.URL.Query().Get("sessionId")
+	if agentID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "agentId required"})
+		return
+	}
+
+	ag := s.agentProvider.AgentByID(agentID)
+	if ag == nil {
+		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "agent not found"})
+		return
+	}
+
+	info := ag.SessionContextInfo(sessionID)
+	jsonResponse(w, http.StatusOK, info)
+}
+
 func (s *Server) handleDeleteChatSession(w http.ResponseWriter, r *http.Request) {
 	if s.agentProvider == nil {
 		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{"error": "gateway is not running"})
