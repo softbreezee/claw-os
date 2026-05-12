@@ -438,22 +438,66 @@ fastclaw backup               # Backup data
 git clone https://github.com/fastclaw-ai/fastclaw.git
 cd fastclaw
 
-# Install dependencies
-./setup.sh          # Install PostgreSQL, Go toolchain, build, configure
-# Or manually:
-make build          # Build binary
-make build-web      # Build web UI
+# Check environment (does NOT install anything)
+./setup.sh
+
+# Build
+make build          # Build binary + web UI (full pipeline)
+make build-web      # Build web UI only (pnpm build → embed)
 
 # Run
 make dev            # Dev mode with hot reload
 make release-local  # Build all platforms
 make test           # Run tests
-
-# Management
-./fastclaw-manager.sh deploy   # Build + install + restart
-./fastclaw-manager.sh status   # Service status + logs
-./fastclaw-manager.sh logs     # Tail live logs
 ```
+
+### fastclaw-manager.sh
+
+Development manager script — a thin wrapper around `fastclaw daemon` with proxy env injection, colored output, and a `deploy` shortcut.
+
+```bash
+./fastclaw-manager.sh [command] [port]
+```
+
+| Command | Description |
+|---------|-------------|
+| `start [port]` | Start as background daemon (default port: 18953) |
+| `stop` | Stop the daemon |
+| `restart [port]` | Restart the daemon |
+| `status` | Service status, port info, config summary, last 10 log lines |
+| `logs` | `tail -f` live log stream (`Ctrl+C` to exit) |
+| `build` | Rebuild the binary (`make build`) |
+| `install` | Copy binary to `~/.local/bin/fastclaw` for global access |
+| `deploy` | Full cycle: `build → install → restart` |
+| `clean` | Remove stale legacy PID / log files left by older versions |
+
+**Key paths managed by the script:**
+
+| Path | Purpose |
+|------|---------|
+| `~/.fastclaw/fastclaw.pid` | Daemon PID file (single source of truth) |
+| `~/.fastclaw/logs/gateway.log` | Daemon log file |
+| `~/.local/bin/fastclaw` | Global install target |
+
+**Typical workflow:**
+
+```bash
+# First time
+make build
+./fastclaw-manager.sh start
+
+# After code changes
+./fastclaw-manager.sh deploy    # build + install + restart in one step
+
+# Observe
+./fastclaw-manager.sh logs      # real-time log tail
+./fastclaw-manager.sh status    # status + port + config + last 10 log lines
+
+# Stop
+./fastclaw-manager.sh stop
+```
+
+> **Note:** `./setup.sh` is a read-only environment checker — it never starts the service. Use `fastclaw-manager.sh` for lifecycle management.
 
 ### Workspace Structure
 

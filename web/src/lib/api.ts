@@ -622,6 +622,29 @@ export async function getSessionContextInfo(agentId: string, sessionId: string):
   }
 }
 
+// System Prompt Preview — labelled breakdown of the agent's static system prompt.
+export interface SystemPromptSectionInfo {
+  name: string;
+  content: string;
+  tokens: number;
+}
+
+export interface SystemPromptInfo {
+  sections: SystemPromptSectionInfo[];
+  totalTokens: number;
+  modelId: string;
+}
+
+export async function getSessionSystemPrompt(agentId: string): Promise<SystemPromptInfo | null> {
+  try {
+    const res = await fetch(`/api/chat/system-prompt?agentId=${encodeURIComponent(agentId)}`);
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
 // Model Catalog
 export interface ModelCatalogModelInfo {
   contextWindow: number;

@@ -157,15 +157,22 @@ main() {
     echo ""
     echo "       go run ./cmd/fastclaw"
     echo ""
-    echo "  或构建后运行:"
+    echo "  或使用管理脚本（推荐开发阶段使用）:"
     echo ""
     if [ "$OS" = "macos" ]; then
         echo "       brew install go node pnpm postgresql@17 pgvector"
         echo "       brew services start postgresql@17"
         echo ""
     fi
-    echo "       make build         # 编译项目"
-    echo "       ./bin/fastclaw     # 启动服务"
+    echo "       make build                     # 编译项目"
+    echo "       ./fastclaw-manager.sh start    # 启动服务（后台 daemon）"
+    echo "       ./fastclaw-manager.sh status   # 查看服务状态"
+    echo "       ./fastclaw-manager.sh logs     # 实时查看日志"
+    echo "       ./fastclaw-manager.sh stop     # 停止服务"
+    echo ""
+    echo "  一键部署（构建 + 安装到全局 + 重启）:"
+    echo ""
+    echo "       ./fastclaw-manager.sh deploy"
     echo ""
 }
 

@@ -345,6 +345,31 @@ func (s *Server) handleChatContextInfo(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, info)
 }
 
+// handleChatSystemPrompt returns a labelled, token-counted breakdown of
+// the agent's current system prompt — the static prefix prepended to
+// every LLM call. Powers the Web UI's "View System Prompt" modal.
+func (s *Server) handleChatSystemPrompt(w http.ResponseWriter, r *http.Request) {
+	if s.agentProvider == nil {
+		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{"error": "gateway is not running"})
+		return
+	}
+
+	agentID := r.URL.Query().Get("agentId")
+	if agentID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "agentId required"})
+		return
+	}
+
+	ag := s.agentProvider.AgentByID(agentID)
+	if ag == nil {
+		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "agent not found"})
+		return
+	}
+
+	info := ag.SessionSystemPrompt()
+	jsonResponse(w, http.StatusOK, info)
+}
+
 func (s *Server) handleDeleteChatSession(w http.ResponseWriter, r *http.Request) {
 	if s.agentProvider == nil {
 		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{"error": "gateway is not running"})

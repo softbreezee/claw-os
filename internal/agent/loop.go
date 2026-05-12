@@ -773,6 +773,47 @@ func (a *Agent) SessionContextInfo(sessionId string) ContextInfo {
 	}
 }
 
+// SystemPromptSectionInfo is one labelled section with its rendered
+// content and an estimated token count, surfaced to the Web UI for the
+// "View System Prompt" preview panel.
+type SystemPromptSectionInfo struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+	Tokens  int    `json:"tokens"`
+}
+
+// SystemPromptInfo is the full breakdown of an agent's current system
+// prompt — what gets sent to the LLM as the system message every turn.
+// `TotalTokens` matches the same `currentTokens - history` slice you'd
+// see in ContextInfo for an empty session, so the two views agree.
+type SystemPromptInfo struct {
+	Sections    []SystemPromptSectionInfo `json:"sections"`
+	TotalTokens int                       `json:"totalTokens"`
+	ModelID     string                    `json:"modelId"`
+}
+
+// SessionSystemPrompt returns the labelled, token-counted breakdown of
+// the system prompt the agent would send right now. Used by the Web UI's
+// "View System Prompt" modal so users can see what's eating their context
+// window and which workspace file / skill is the dominant contributor.
+func (a *Agent) SessionSystemPrompt() SystemPromptInfo {
+	sections := a.ctxBuilder.BuildSystemPromptSections()
+	out := SystemPromptInfo{
+		Sections: make([]SystemPromptSectionInfo, 0, len(sections)),
+		ModelID:  a.model,
+	}
+	for _, s := range sections {
+		tokens := estimateStringTokens(s.Content)
+		out.TotalTokens += tokens
+		out.Sections = append(out.Sections, SystemPromptSectionInfo{
+			Name:    s.Name,
+			Content: s.Content,
+			Tokens:  tokens,
+		})
+	}
+	return out
+}
+
 // runPostTurn fires PostTurn hooks and handles auto-persist and skills learning.
 func (a *Agent) runPostTurn(ctx context.Context, messages []provider.Message, toolCallCount int) {
 	a.turnCount++

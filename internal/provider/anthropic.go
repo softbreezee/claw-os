@@ -44,14 +44,30 @@ type anthropicTool struct {
 	InputSchema interface{} `json:"input_schema"`
 }
 
+// anthropicSystemBlock is the structured form of a system message,
+// required when we want to attach cache_control for prompt caching.
+// Sending `system` as an array of blocks (instead of a plain string)
+// is what lets Anthropic cache the prefix; cache hits drop input cost
+// to ~10% of the normal rate. See:
+// https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+type anthropicSystemBlock struct {
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text"`
+	CacheControl map[string]interface{} `json:"cache_control,omitempty"`
+}
+
 type anthropicRequest struct {
-	Model       string             `json:"model"`
-	Messages    []anthropicMessage `json:"messages"`
-	System      string             `json:"system,omitempty"`
-	MaxTokens   int                `json:"max_tokens"`
-	Temperature float64            `json:"temperature,omitempty"`
-	Stream      bool               `json:"stream"`
-	Tools       []anthropicTool    `json:"tools,omitempty"`
+	Model    string             `json:"model"`
+	Messages []anthropicMessage `json:"messages"`
+	// System is interface{} to allow either a plain string (no caching)
+	// or an array of anthropicSystemBlock (with cache_control). The wire
+	// format accepts both; we prefer the array form whenever System is
+	// non-empty so the static prefix is always cached.
+	System      interface{}     `json:"system,omitempty"`
+	MaxTokens   int             `json:"max_tokens"`
+	Temperature float64         `json:"temperature,omitempty"`
+	Stream      bool            `json:"stream"`
+	Tools       []anthropicTool `json:"tools,omitempty"`
 }
 
 // toAnthropicMessages converts provider Messages to Anthropic wire format.
@@ -145,10 +161,20 @@ func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message
 	req := anthropicRequest{
 		Model:       StripProviderPrefix(model),
 		Messages:    anthropicMsgs,
-		System:      system,
 		MaxTokens:   maxTokens,
 		Temperature: temperature,
 		Stream:      stream,
+	}
+	// Attach cache_control to the system block so Anthropic caches the
+	// static prefix. ~5kB system prompts are well above the 1024-token
+	// minimum for caching, so this is a free 60-90% input cost win on
+	// every follow-up turn within the 5-minute TTL window.
+	if system != "" {
+		req.System = []anthropicSystemBlock{{
+			Type:         "text",
+			Text:         system,
+			CacheControl: map[string]interface{}{"type": "ephemeral"},
+		}}
 	}
 
 	if len(tools) > 0 {

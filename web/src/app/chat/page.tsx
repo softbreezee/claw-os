@@ -16,12 +16,14 @@ import {
   fileURL,
   openWorkspace,
   getSessionContextInfo,
+  getSessionSystemPrompt,
   type AgentInfo,
   type ChatAttachment,
   type ChatHistoryMessage,
   type ChatStreamEvent,
   type SkillInfo,
   type SessionContextInfo,
+  type SystemPromptInfo,
 } from "@/lib/api";
 import {
   DropdownMenu,
@@ -51,6 +53,8 @@ import {
   FileText,
   FolderOpen,
   Sparkles,
+  Eye,
+  FileCode,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -275,6 +279,13 @@ export default function ChatPage() {
   // Context window usage info — polled every 10s and after each message round-trip.
   const [contextInfo, setContextInfo] = useState<SessionContextInfo | null>(null);
 
+  // System prompt preview — fetched lazily when the user opens the modal so we
+  // don't pay the (small) cost on every page load. Cleared on agent switch so
+  // the cached preview never lies about which agent it represents.
+  const [systemPromptInfo, setSystemPromptInfo] = useState<SystemPromptInfo | null>(null);
+  const [showSystemPromptModal, setShowSystemPromptModal] = useState(false);
+  const [systemPromptLoading, setSystemPromptLoading] = useState(false);
+
   // Mutable mirror of `runtimes` so the SSE callback (long-lived closure)
   // can read the latest state without stale-closure bugs and keep the
   // streaming accumulators (curCalls / curContent) outside React state.
@@ -360,6 +371,24 @@ export default function ChatPage() {
   // to be a per-message tweak within one agent context.
   useEffect(() => {
     setModelOverride("");
+    // Drop any cached system-prompt preview — it belonged to the old agent
+    // and would be misleading if the user opened the modal again.
+    setSystemPromptInfo(null);
+  }, [selectedAgent]);
+
+  // Fetch the system-prompt breakdown on demand. We refresh every time the
+  // modal is opened so workspace edits to AGENTS.md / SOUL.md / skills are
+  // reflected without the user needing to reload the page.
+  const openSystemPromptModal = useCallback(async () => {
+    if (!selectedAgent) return;
+    setShowSystemPromptModal(true);
+    setSystemPromptLoading(true);
+    try {
+      const info = await getSessionSystemPrompt(selectedAgent);
+      setSystemPromptInfo(info);
+    } finally {
+      setSystemPromptLoading(false);
+    }
   }, [selectedAgent]);
 
   const loadSessions = useCallback((agentId: string) => {
@@ -951,6 +980,19 @@ export default function ChatPage() {
               <ContextRing info={contextInfo} />
             )}
 
+            {/* View System Prompt — opens a modal with the full, labelled
+                breakdown of what the agent prepends to every LLM call.
+                Useful for understanding the baseline token cost shown by
+                the ContextRing on a fresh session. */}
+            <button
+              onClick={openSystemPromptModal}
+              disabled={!selectedAgent}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title="View system prompt"
+            >
+              <Eye className="h-4 w-4" />
+            </button>
+
             {/* Open the agent's workspace directory in the host file
                 explorer. Shows briefly to confirm the request was
                 received — actual GUI launch happens server-side. */}
@@ -1279,6 +1321,20 @@ export default function ChatPage() {
           </div>
         </div>
       </div>
+
+      {/* System Prompt Preview Modal — full-screen overlay with the labelled,
+          token-counted breakdown of what gets prepended to every LLM call.
+          Sections are ordered by token weight so the dominant contributor
+          (usually AGENTS.md or skills) is immediately visible. */}
+      {showSystemPromptModal && (
+        <SystemPromptModal
+          info={systemPromptInfo}
+          loading={systemPromptLoading}
+          agentId={selectedAgent}
+          onClose={() => setShowSystemPromptModal(false)}
+          onRefresh={openSystemPromptModal}
+        />
+      )}
     </div>
   );
 }
@@ -1376,6 +1432,232 @@ function ContextRing({ info }: { info: SessionContextInfo }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── System Prompt Modal ──────────────────────────────────────────────────────
+// Full-screen overlay that surfaces the labelled, token-counted breakdown
+// of the agent's system prompt — exactly what gets sent to the LLM as the
+// `system` message every turn. Sections are sorted by token weight so the
+// dominant contributor is at the top, with a per-section copy button and
+// expand/collapse for the rendered content.
+
+function SystemPromptModal({
+  info,
+  loading,
+  agentId,
+  onClose,
+  onRefresh,
+}: {
+  info: SystemPromptInfo | null;
+  loading: boolean;
+  agentId: string;
+  onClose: () => void;
+  onRefresh: () => void;
+}) {
+  // Per-section expand state. Default: only the dominant section is expanded
+  // so the modal opens to a digestible overview rather than a wall of text.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // Esc to dismiss — standard modal affordance.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Sort sections by token count desc so the dominant contributor is on top.
+  // We keep the original order as a tiebreaker for sections of equal size.
+  const sortedSections = useMemo(() => {
+    if (!info) return [];
+    return info.sections
+      .map((s, idx) => ({ ...s, _origIdx: idx }))
+      .sort((a, b) => b.tokens - a.tokens || a._origIdx - b._origIdx);
+  }, [info]);
+
+  // Auto-expand the heaviest section the first time we get data for an agent.
+  useEffect(() => {
+    if (!info || sortedSections.length === 0) return;
+    setExpanded((prev) => {
+      // Only seed if nothing is currently expanded; otherwise respect user choice.
+      const anyOpen = Object.values(prev).some(Boolean);
+      if (anyOpen) return prev;
+      const top = sortedSections[0];
+      return { [top.name]: true };
+    });
+  }, [info, sortedSections]);
+
+  const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+  const copySection = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 1500);
+    } catch {
+      /* clipboard API blocked — non-fatal */
+    }
+  };
+
+  const copyAll = async () => {
+    if (!info) return;
+    const joined = info.sections.map((s) => s.content).join("\n\n---\n\n");
+    await copySection("__all__", joined);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={onClose}
+    >
+      <div
+        className="relative flex h-[85vh] w-full max-w-4xl flex-col rounded-2xl border border-border bg-card shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-border px-5 py-3 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+              <FileCode className="h-4 w-4 text-primary" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold leading-tight">System Prompt</p>
+              <p className="text-[11px] text-muted-foreground font-mono leading-tight truncate">
+                {agentId}
+                {info?.modelId ? `  ·  ${info.modelId}` : ""}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {info && (
+              <span className="rounded-md bg-muted px-2 py-1 text-[11px] font-mono text-muted-foreground">
+                {fmtK(info.totalTokens)} tk total
+              </span>
+            )}
+            <button
+              onClick={copyAll}
+              disabled={!info}
+              className="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40"
+              title="Copy entire system prompt"
+            >
+              {copiedKey === "__all__" ? (
+                <Check className="h-3.5 w-3.5 text-emerald-500" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )}
+              <span>Copy all</span>
+            </button>
+            <button
+              onClick={onRefresh}
+              disabled={loading}
+              className="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40"
+              title="Refresh — re-reads workspace files"
+            >
+              Refresh
+            </button>
+            <button
+              onClick={onClose}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              title="Close (Esc)"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto">
+          {loading && !info ? (
+            <div className="flex h-full items-center justify-center">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <div className="h-4 w-4 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                Loading system prompt…
+              </div>
+            </div>
+          ) : !info ? (
+            <div className="flex h-full items-center justify-center">
+              <p className="text-sm text-muted-foreground">No system prompt available.</p>
+            </div>
+          ) : (
+            <div className="space-y-2 p-4">
+              {sortedSections.map((s) => {
+                const pct = info.totalTokens > 0 ? (s.tokens / info.totalTokens) * 100 : 0;
+                const isOpen = !!expanded[s.name];
+                return (
+                  <div
+                    key={s.name}
+                    className="rounded-xl border border-border/60 bg-background/50 overflow-hidden"
+                  >
+                    {/* Section header — click to expand */}
+                    <button
+                      onClick={() => setExpanded((p) => ({ ...p, [s.name]: !p[s.name] }))}
+                      className="flex w-full items-center gap-3 px-4 py-2.5 hover:bg-muted/30 transition-colors text-left"
+                    >
+                      {isOpen ? (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-muted-foreground/60 shrink-0" />
+                      )}
+                      <span className="text-sm font-semibold text-foreground shrink-0">
+                        {s.name}
+                      </span>
+                      <div className="flex-1 min-w-0 flex items-center gap-2">
+                        {/* Inline mini progress bar showing share of total */}
+                        <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden max-w-[200px]">
+                          <div
+                            className="h-full rounded-full bg-primary/60 transition-all"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span className="text-[11px] text-muted-foreground font-mono shrink-0">
+                          {pct.toFixed(1)}%
+                        </span>
+                      </div>
+                      <span className="text-xs font-mono text-muted-foreground shrink-0 tabular-nums">
+                        {fmtK(s.tokens)} tk
+                      </span>
+                    </button>
+
+                    {/* Section body */}
+                    {isOpen && (
+                      <div className="border-t border-border/60 bg-muted/10">
+                        <div className="flex items-center justify-end px-3 py-1.5 border-b border-border/40">
+                          <button
+                            onClick={() => copySection(s.name, s.content)}
+                            className="flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                            title="Copy section"
+                          >
+                            {copiedKey === s.name ? (
+                              <Check className="h-3 w-3 text-emerald-500" />
+                            ) : (
+                              <Copy className="h-3 w-3" />
+                            )}
+                            <span>{copiedKey === s.name ? "Copied" : "Copy"}</span>
+                          </button>
+                        </div>
+                        <pre className="text-[12px] font-mono px-4 py-3 overflow-x-auto whitespace-pre-wrap break-words leading-relaxed text-foreground/90 max-h-[40vh] overflow-y-auto">
+                          {s.content || <span className="text-muted-foreground italic">(empty)</span>}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Footer hint */}
+        <div className="border-t border-border px-5 py-2 text-[11px] text-muted-foreground/70 shrink-0">
+          This is exactly what gets sent to the LLM as the <code className="font-mono">system</code> message every turn.
+          Edit AGENTS.md / SOUL.md / skills in the workspace and click Refresh to re-render.
+        </div>
+      </div>
     </div>
   );
 }

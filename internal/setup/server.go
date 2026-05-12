@@ -55,6 +55,10 @@ type AgentHandle interface {
 	DeleteWebSession(sessionId string) error
 	// SessionContextInfo returns token usage stats for a web session.
 	SessionContextInfo(sessionId string) agent.ContextInfo
+	// SessionSystemPrompt returns the labelled, token-counted breakdown
+	// of the system prompt the agent currently sends to the LLM. Used by
+	// the Web UI's "View System Prompt" preview modal.
+	SessionSystemPrompt() agent.SystemPromptInfo
 	// WorkspacePath returns the on-disk directory the agent uses for
 	// scratch files, generated artifacts, and the SOUL.md / MEMORY.md
 	// markdown files. Used by the file-serving endpoints so the chat
@@ -159,6 +163,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/chat/sessions", s.handleChatSessions)
 	mux.HandleFunc("DELETE /api/chat/sessions", s.handleDeleteChatSession)
 	mux.HandleFunc("GET /api/chat/context-info", s.handleChatContextInfo)
+	mux.HandleFunc("GET /api/chat/system-prompt", s.handleChatSystemPrompt)
 
 	// File serving (chat attachments preview + agent-generated artifacts)
 	mux.HandleFunc("GET /api/files", s.handleServeFile)
