@@ -193,6 +193,9 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Channels
 	mux.HandleFunc("GET /api/channels", s.handleListChannels)
+	mux.HandleFunc("PUT /api/channels/{type}", s.handleUpsertChannel)
+	mux.HandleFunc("DELETE /api/channels/{type}", s.handleDeleteChannel)
+	mux.HandleFunc("POST /api/channels/test", s.handleTestChannel)
 
 	// Cron jobs
 	mux.HandleFunc("GET /api/cron", s.handleListCronJobs)

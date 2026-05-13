@@ -23,6 +23,25 @@ export interface ChannelInfo {
   status?: string;
 }
 
+// Detailed channel record returned by GET /api/channels — drives the
+// Channels management UI. Tokens arrive masked ("ab12****wxyz") and
+// can be re-submitted as-is to mean "keep the existing value".
+export interface ChannelAccount {
+  id: string;
+  botToken: string;       // masked; submit unchanged to preserve
+  agentId?: string;       // bound agent, derived from cfg.bindings
+  botUsername?: string;   // populated client-side after a successful test
+}
+
+export interface ChannelDetail {
+  type: string;           // "telegram" | "discord" | "slack"
+  enabled: boolean;
+  botToken?: string;      // masked; legacy / fallback bot token
+  appToken?: string;      // masked; slack-only
+  accounts: ChannelAccount[];
+  status?: string;        // "connected" | "disconnected"
+}
+
 export interface ProviderInfo {
   name: string;
   model: string;
@@ -526,8 +545,74 @@ export async function updatePlugin(id: string, data: Partial<PluginInfo>) {
 }
 
 // Channels
+//
+// NOTE: GET /api/channels now returns the *detailed* shape (with
+// accounts + bindings) used by the Channels management page. The
+// Status endpoint still returns the lightweight ChannelInfo shape
+// for the Overview / sidebar pills. We expose two helpers so each
+// caller picks the right shape; getChannels() preserves the old
+// signature so existing callers (Overview pill, etc.) still compile,
+// while getChannelsDetailed() returns the richer shape.
 export async function getChannels(): Promise<ChannelInfo[]> {
   const res = await fetch("/api/channels");
+  const data = (await res.json()) as ChannelDetail[] | null;
+  if (!Array.isArray(data)) return [];
+  // Project to the legacy shape so old callers keep working unchanged.
+  return data.map((c) => ({
+    type: c.type,
+    botUsername: c.accounts?.[0]?.botUsername ?? "",
+    enabled: c.enabled,
+    status: c.status,
+  }));
+}
+
+export async function getChannelsDetailed(): Promise<ChannelDetail[]> {
+  const res = await fetch("/api/channels");
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export interface ChannelUpdateBody {
+  enabled: boolean;
+  botToken?: string;
+  appToken?: string;
+  accounts: Array<{
+    id: string;
+    botToken: string;     // pass masked value to keep, or new value to update
+    agentId?: string;
+  }>;
+}
+
+export async function updateChannel(
+  type: string,
+  body: ChannelUpdateBody,
+): Promise<{ ok: boolean; needsRestart?: boolean; error?: string }> {
+  const res = await fetch(`/api/channels/${encodeURIComponent(type)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+export async function deleteChannel(
+  type: string,
+): Promise<{ ok: boolean; needsRestart?: boolean; error?: string }> {
+  const res = await fetch(`/api/channels/${encodeURIComponent(type)}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
+export async function testChannel(
+  type: string,
+  botToken: string,
+): Promise<{ ok: boolean; botUsername?: string; firstName?: string; error?: string }> {
+  const res = await fetch("/api/channels/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type, botToken }),
+  });
   return res.json();
 }
 

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/config"
-	"github.com/fastclaw-ai/fastclaw/internal/daemon"
 )
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -700,30 +699,26 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, result)
 }
 
-// handleDaemonRestart stops the running daemon and relaunches it with the same
-// port. The restart is async — the response is sent before the process exits,
-// so the caller should poll /api/status until the gateway comes back up.
+// handleDaemonRestart signals the daemon supervisor to restart the gateway.
+// The response is flushed before the process exits so the caller receives it.
+// The daemon's RunLoop detects exit code 75 and immediately relaunches the
+// gateway process; the caller should poll /api/status until it comes back up.
 func (s *Server) handleDaemonRestart(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true, "message": "restarting"})
 
-	// Flush the response before killing ourselves.
+	// Flush the response before exiting.
 	if fl, ok := w.(http.Flusher); ok {
 		fl.Flush()
 	}
 
-	port := s.port
 	go func() {
+		// Give the HTTP layer a moment to finish writing the response.
 		time.Sleep(300 * time.Millisecond)
-		slog.Info("daemon restart requested via API", "port", port)
-		_ = daemonRestart(port)
+		slog.Info("daemon restart requested via API, exiting with restart code")
+		// Exit with the special restart code. The daemon RunLoop will
+		// detect this and immediately relaunch the gateway.
+		os.Exit(75)
 	}()
-}
-
-// daemonRestart stops the current daemon and starts a new one.
-func daemonRestart(port int) error {
-	_ = daemon.Stop()
-	time.Sleep(800 * time.Millisecond)
-	return daemon.Start(port)
 }
 
 // saveConfigFile persists the config to ~/.fastclaw/fastclaw.json.

@@ -133,6 +133,11 @@ func RunLoop(port int) error {
 	}
 	bin, _ = filepath.EvalSymlinks(bin)
 
+	// exitCodeRestart is the exit code the gateway uses when it wants to be
+	// restarted immediately (e.g. after a config change via the REST API).
+	// Distinct from 0 (clean stop) and signal exits (crash).
+	const exitCodeRestart = 75
+
 	const maxRestarts = 10
 	const maxBackoff = 30 * time.Second
 	const stableThreshold = 60 * time.Second
@@ -166,14 +171,22 @@ func RunLoop(port int) error {
 		elapsed := time.Since(startTime)
 
 		if err == nil {
-			// Clean exit
+			// Clean exit (exit code 0) — permanent stop.
 			fmt.Fprintf(os.Stderr, "[daemon] gateway exited cleanly\n")
 			return nil
 		}
 
-		// Check if we were signaled to stop
+		// Check for special exit codes and signals before treating as a crash.
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			switch exitErr.ExitCode() {
+			case exitCodeRestart:
+				// Gateway requested an intentional restart (e.g. config change).
+				fmt.Fprintln(os.Stderr, "[daemon] gateway requested restart, restarting immediately")
+				consecutiveCrashes = 0
+				backoff = time.Second
+				continue
+			}
 			if isCleanShutdown(exitErr) {
 				fmt.Fprintln(os.Stderr, "[daemon] gateway received shutdown signal, stopping")
 				return nil

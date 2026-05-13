@@ -18,6 +18,7 @@ import {
   Zap,
   CheckCircle2,
   XCircle,
+  Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -179,6 +180,29 @@ export default function OverviewPage() {
           <QuickAction href="/settings/" icon={Settings} iconBg="bg-amber-500/10 text-amber-500" label="Settings" desc="Gateway configuration" />
         </div>
       </div>
+
+      {/* Channel CTA — surfaces only when the user hasn't wired up a
+          messaging bot yet. Replaces the missing onboard step that used
+          to walk users through Telegram setup. Hidden the moment any
+          channel exists so it doesn't nag long-time users. */}
+      {status?.running && (!status?.channels || status.channels.length === 0) && (
+        <Link href="/channels/" className="block">
+          <div className="group rounded-xl border border-blue-500/30 bg-gradient-to-br from-blue-500/5 to-blue-500/10 p-5 transition-colors hover:from-blue-500/10 hover:to-blue-500/15">
+            <div className="flex items-center gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 transition-transform group-hover:scale-105">
+                <Send className="h-6 w-6 text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-base font-medium leading-tight">Connect a messaging bot</p>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  Hook up Telegram (or Discord / Slack) so your agents can reply in real chat — takes about a minute.
+                </p>
+              </div>
+              <ArrowRight className="h-5 w-5 text-blue-500/60 group-hover:text-blue-500 group-hover:translate-x-0.5 transition-all shrink-0" />
+            </div>
+          </div>
+        </Link>
+      )}
 
       {/* Agents + Provider */}
       <div className="grid gap-4 md:grid-cols-2">
