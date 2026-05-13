@@ -1,0 +1,14 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <!-- Compact favicon variant: drop the outer dashed ring for clarity at 16x16 -->
+  <circle cx="32" cy="32" r="30" fill="#1a1a1a"/>
+  <path d="M32 28
+           C 25 28, 21 33, 21.5 39
+           C 22 44, 26 47.5, 32 47.5
+           C 38 47.5, 42 44, 42.5 39
+           C 43 33, 39 28, 32 28 Z"
+        fill="#f59e0b"/>
+  <ellipse cx="18.5" cy="26" rx="3.6" ry="4.8" fill="#f59e0b" transform="rotate(-22 18.5 26)"/>
+  <ellipse cx="26"   cy="17" rx="3.2" ry="4.2" fill="#f59e0b" transform="rotate(-8 26 17)"/>
+  <ellipse cx="38"   cy="17" rx="3.2" ry="4.2" fill="#f59e0b" transform="rotate(8 38 17)"/>
+  <ellipse cx="45.5" cy="26" rx="3.6" ry="4.8" fill="#f59e0b" transform="rotate(22 45.5 26)"/>
+</svg>

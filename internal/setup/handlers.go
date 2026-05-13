@@ -518,7 +518,7 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	// Write bootstrap files
 	bootstrapFiles := map[string]string{
 		"AGENTS.md":    "# Agent Capabilities\n\nDescribe what this agent can do.\n",
-		"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a FastClaw AI agent.\n", req.AgentName),  // use display name
+		"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a Pawnix AI agent.\n", req.AgentName),  // use display name
 		"USER.md":      "# User\n\nInformation about the user you serve.\n",
 		"TOOLS.md":     "# Tools\n\nAdditional tool usage instructions.\n",
 		"BOOTSTRAP.md": "# Bootstrap\n\nStartup instructions loaded on every conversation.\n",

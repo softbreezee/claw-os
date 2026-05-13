@@ -86,7 +86,7 @@ func (a *Agent) handleSlashCommand(msg bus.InboundMessage) slashResult {
 		return slashResult{handled: true, reply: a.slashHelp()}
 
 	case "/version":
-		return slashResult{handled: true, reply: fmt.Sprintf("⚡ FastClaw\nAgent: %s\nModel: %s", a.name, a.model)}
+		return slashResult{handled: true, reply: fmt.Sprintf("⚡ Pawnix\nAgent: %s\nModel: %s", a.name, a.model)}
 
 	default:
 		return slashResult{}
@@ -188,7 +188,7 @@ func (a *Agent) slashStatus(msg bus.InboundMessage) slashResult {
 
 	soul := a.loadSoulName()
 
-	status := fmt.Sprintf("⚡ FastClaw Status\n"+
+	status := fmt.Sprintf("⚡ Pawnix Status\n"+
 		"─────────────────\n"+
 		"Agent:       %s\n"+
 		"Model:       %s\n"+
@@ -368,7 +368,7 @@ func (a *Agent) loadSoulName() string {
 }
 
 func (a *Agent) slashHelp() string {
-	return `⚡ FastClaw Commands
+	return `⚡ Pawnix Commands
 
 Conversation
   /new, /reset    — Clear session history

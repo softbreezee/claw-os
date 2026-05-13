@@ -29,8 +29,8 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "FastClaw",
-  description: "AI Agent Framework",
+  title: "Pawnix",
+  description: "Self-hosted AI-Native personal OS",
 };
 
 export default function RootLayout({

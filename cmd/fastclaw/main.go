@@ -33,7 +33,7 @@ import (
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "fastclaw",
-		Short: "FastClaw - Lightweight AI Agent Framework",
+		Short: "Pawnix - Lightweight AI Agent Framework",
 		// No args = default to gateway (so double-click on Windows works)
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGateway(18953)
@@ -65,7 +65,7 @@ func gatewayCmd() *cobra.Command {
 	var port int
 	cmd := &cobra.Command{
 		Use:   "gateway",
-		Short: "Start the FastClaw gateway (loads all agents)",
+		Short: "Start the Pawnix gateway (loads all agents)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGateway(port)
 		},
@@ -172,7 +172,7 @@ func runGateway(port int) error {
 	)
 
 	// Write fastclaw.gateway.json for ChatClaw auto-detect
-	writeFastClawGatewayConfig(port, gatewayToken)
+	writePawnixGatewayConfig(port, gatewayToken)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -226,8 +226,8 @@ func (r *chatTaskAgentResolver) AgentByID(id string) taskrunner.AgentHandle {
 	return ag
 }
 
-// writeFastClawGatewayConfig writes ~/.fastclaw/fastclaw.gateway.json for ChatClaw auto-detect.
-func writeFastClawGatewayConfig(port int, token string) {
+// writePawnixGatewayConfig writes ~/.fastclaw/fastclaw.gateway.json for ChatClaw auto-detect.
+func writePawnixGatewayConfig(port int, token string) {
 	if token == "" {
 		return
 	}

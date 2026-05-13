@@ -64,7 +64,7 @@ func agentCreateCmd() *cobra.Command {
 
 			bootstrapFiles := map[string]string{
 				"AGENTS.md":    "# Agent Capabilities\n\nDescribe what this agent can do.",
-				"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a FastClaw AI agent.", name),
+				"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a Pawnix AI agent.", name),
 				"SOUL.md":      "# Soul\n\nYour personality and behavioral guidelines.",
 				"USER.md":      "# User\n\nInformation about the user you serve.",
 				"TOOLS.md":     "# Tools\n\nAdditional tool usage instructions.",

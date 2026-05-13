@@ -128,7 +128,7 @@ export default function OnboardPage() {
     telegramEnabled: false,
     telegramToken: "",
     port: 18953,
-    agentName: "FastClaw",
+    agentName: "Pawnix",
     personality:
       "You are a helpful, friendly AI assistant. You respond concisely and accurately.",
   });
@@ -188,7 +188,7 @@ export default function OnboardPage() {
       }
     } catch {
       setTestStatus("error");
-      setTestError("Could not reach the server. Is FastClaw running?");
+      setTestError("Could not reach the server. Is Pawnix running?");
     }
   }, [config.apiBase, config.apiKey, config.model, config.apiType, config.authType]);
 
@@ -286,12 +286,12 @@ export default function OnboardPage() {
           <Card className="backdrop-blur-sm">
             <CardHeader className="space-y-6 pb-4 text-center">
               <div className="mx-auto flex h-16 w-16 items-center justify-center">
-                <img src="/logo.png" alt="FastClaw" className="h-16 w-16 rounded-2xl" />
+                <img src="/logo.svg" alt="Pawnix" className="h-16 w-16 rounded-2xl" />
               </div>
               <div>
                 <CardTitle className="text-3xl font-bold">
                   <span className="animate-gradient-text bg-gradient-to-r from-violet-400 via-cyan-400 to-violet-400 bg-clip-text text-transparent">
-                    FastClaw
+                    Pawnix
                   </span>
                 </CardTitle>
               </div>
@@ -590,7 +590,7 @@ export default function OnboardPage() {
               </CardTitle>
               <CardDescription>
                 {launched
-                  ? "FastClaw is now configured and ready to go."
+                  ? "Pawnix is now configured and ready to go."
                   : "Review your configuration before launching."}
               </CardDescription>
             </CardHeader>
@@ -672,7 +672,7 @@ export default function OnboardPage() {
                     className="w-full bg-gradient-to-r from-violet-600 to-cyan-600 text-white hover:from-violet-700 hover:to-cyan-700 transition-all"
                     size="lg"
                   >
-                    Launch FastClaw
+                    Launch Pawnix
                     <svg
                       className="ml-2 h-4 w-4"
                       fill="none"
@@ -702,7 +702,7 @@ export default function OnboardPage() {
       </div>
 
       <p className="relative mt-8 text-xs text-muted-foreground/50">
-        FastClaw Agent Framework
+        Pawnix Agent Framework
       </p>
     </div>
   );

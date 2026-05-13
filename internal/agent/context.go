@@ -88,7 +88,7 @@ func (cb *ContextBuilder) BuildSystemPromptSections() []SystemPromptSection {
 	if modelLine == "" {
 		modelLine = "(unknown)"
 	}
-	identity := fmt.Sprintf(`You are FastClaw, a lightweight AI Agent.
+	identity := fmt.Sprintf(`You are Pawnix, a self-hosted AI-Native personal OS.
 Model: %s
 OS: %s/%s
 Working Directory: %s`, modelLine, runtime.GOOS, runtime.GOARCH, cb.workspace)

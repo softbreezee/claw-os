@@ -17,7 +17,7 @@ import (
 func doctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
-		Short: "Check FastClaw configuration and environment",
+		Short: "Check Pawnix configuration and environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDoctor()
 		},
@@ -25,7 +25,7 @@ func doctorCmd() *cobra.Command {
 }
 
 func runDoctor() error {
-	fmt.Println("🩺 FastClaw Doctor")
+	fmt.Println("🩺 Pawnix Doctor")
 	fmt.Println(strings.Repeat("─", 40))
 	issues := 0
 	warnings := 0

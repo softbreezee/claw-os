@@ -121,10 +121,10 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         {/* Logo / status */}
         <div className="flex h-14 items-center gap-3 border-b border-border px-4">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary/10">
-            <img src="/logo.png" alt="" className="h-8 w-8 rounded-xl" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+            <img src="/logo.svg" alt="" className="h-8 w-8 rounded-xl" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-foreground leading-tight">FastClaw</p>
+            <p className="text-sm font-semibold text-foreground leading-tight">Pawnix</p>
             <div className="flex items-center gap-1.5 mt-0.5">
               <span className={`h-1.5 w-1.5 rounded-full ${gatewayRunning ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
               <p className="text-[10px] text-muted-foreground leading-none">
@@ -158,9 +158,9 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
       <div className="fixed top-0 left-0 right-0 z-40 flex h-12 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur-md md:hidden">
         <div className="flex items-center gap-2">
           <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
-            <img src="/logo.png" alt="" className="h-7 w-7 rounded-lg" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+            <img src="/logo.svg" alt="" className="h-7 w-7 rounded-lg" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
           </div>
-          <span className="text-sm font-semibold text-foreground">FastClaw</span>
+          <span className="text-sm font-semibold text-foreground">Pawnix</span>
           <span className={`h-1.5 w-1.5 rounded-full ${gatewayRunning ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
         </div>
 
