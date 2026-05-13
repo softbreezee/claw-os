@@ -171,9 +171,44 @@ func makeExecToolFull(sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillD
 			}
 		}
 
+		// Detach the child into its own process group (unix only) so
+		// that cancellation can SIGKILL the whole tree, not just the
+		// `sh -c …` parent. This matters when the LLM produces commands
+		// like `nohup python -m http.server &` that fork grandchildren
+		// holding the inherited stdout / stderr pipes — without group-
+		// kill those grandchildren outlive the timeout and keep the
+		// pipes open.
+		setProcessGroup(cmd)
+
+		// WaitDelay is the cleanest fix for the canonical "exec hangs
+		// on backgrounded subprocess" bug:
+		//
+		//   nohup python3 -m http.server 8899 > /tmp/x.log 2>&1 &
+		//
+		// `sh -c …` exits immediately, but the spawned python inherits
+		// the cmd.Stdout / cmd.Stderr pipe fds (the file redirect only
+		// rebinds python's own stdout — the inherited fastclaw-side
+		// pipe fd survives because Go reuses it). cmd.CombinedOutput
+		// then waits on EOF that never comes and the agent loop hangs
+		// indefinitely. WaitDelay tells exec.Cmd to force-close those
+		// pipes 2s after the context is done (or after Wait completes
+		// with pipes still open), so we always return — at worst with
+		// a truncated tail. Combined with the process-group kill above
+		// the grandchild also gets reaped instead of being orphaned.
+		cmd.WaitDelay = 2 * time.Second
+
 		output, err := cmd.CombinedOutput()
 		result := truncateOutput(string(output))
 		if err != nil {
+			// When ctx fired the timeout (or the user pressed Stop),
+			// surface a clear, model-friendly message instead of the
+			// terse "signal: killed" so the LLM understands *why* it
+			// got no useful output and can adapt (e.g. avoid spawning
+			// long-running background processes from exec next time).
+			if execCtx.Err() == context.DeadlineExceeded {
+				suffix := fmt.Sprintf("\n[exec timed out after %ds — for long-running services (http.server, daemons), run them outside this tool or use disown/setsid + redirect ALL fds; e.g. `setsid sh -c 'python3 -m http.server 8899 </dev/null >/tmp/x.log 2>&1 &' </dev/null >/dev/null 2>&1`]", timeout)
+				return result + suffix, nil
+			}
 			return fmt.Sprintf("%s\nError: %s", result, err.Error()), err
 		}
 		return result, nil

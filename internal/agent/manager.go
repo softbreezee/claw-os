@@ -38,6 +38,11 @@ func NewManager(resolved []config.ResolvedAgent, registry *provider.Registry, mb
 	for _, rc := range resolved {
 		prov := registry.For(rc.Model)
 		ag := NewAgent(rc, prov, mb, homeDir)
+		// Hand the agent the shared registry so per-call model
+		// overrides (chat-UI picker) can re-route to the matching
+		// upstream instead of being pinned to the agent's bound
+		// provider — see Agent.effectiveProvider.
+		ag.SetProviderRegistry(registry)
 		m.agents[rc.ID] = ag
 
 		slog.Info("loaded agent",

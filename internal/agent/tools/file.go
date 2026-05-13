@@ -4,10 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// previewRawArgs returns a single-line, length-capped preview of a tool
+// call's raw arguments, safe to put in a log line. Used for forensics
+// when a guard rejects a tool call: we want to see what the model
+// actually emitted (especially when the front-end preview disagrees
+// with what the back-end parsed) without flooding the log with the
+// full payload — write_file content can be tens of KB of HTML.
+func previewRawArgs(raw json.RawMessage) string {
+	const max = 256
+	s := string(raw)
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	if len(s) > max {
+		return s[:max] + fmt.Sprintf("…(%d bytes total)", len(raw))
+	}
+	return s
+}
 
 type readFileArgs struct {
 	Path string `json:"path"`
@@ -99,7 +116,19 @@ func makeReadFile(workspace string) ToolFunc {
 			return "", fmt.Errorf("parse args: %w", err)
 		}
 
+		// Guard: an empty/whitespace-only path silently joins to the
+		// workspace root and yields a confusing "is a directory" OS
+		// error. Surface the real cause so the model self-corrects
+		// instead of retrying the same bad call.
+		if strings.TrimSpace(args.Path) == "" {
+			return "", fmt.Errorf("path is required (got empty or whitespace-only string); pass a file path like \"NOTES.md\" or an absolute path")
+		}
+
 		fullPath := resolvePath(workspace, args.Path)
+		info, err := os.Stat(fullPath)
+		if err == nil && info.IsDir() {
+			return "", fmt.Errorf("path %q resolves to a directory (%s); use list_dir to enumerate, or pass a file path", args.Path, fullPath)
+		}
 		data, err := os.ReadFile(fullPath)
 		if err != nil {
 			return "", fmt.Errorf("read file: %w", err)
@@ -116,7 +145,38 @@ func makeWriteFile(workspace string) ToolFunc {
 			return "", fmt.Errorf("parse args: %w", err)
 		}
 
+		// Guard 1: path is required. An empty/whitespace-only path
+		// silently joins to the workspace root via filepath.Join,
+		// and the workspace root is itself a directory — the OS
+		// then returns the famously opaque "is a directory" error
+		// (see /Users/.../.fastclaw/agents/<id>/agent crash mode).
+		// Reject early with a message the model can act on.
+		if strings.TrimSpace(args.Path) == "" {
+			// Forensic log: when this fires we want to see what the
+			// model actually emitted, because the front-end preview
+			// has been observed to disagree with the parsed args
+			// (suspected SSE-chunk truncation in the upstream
+			// stream). Truncated to keep huge `content` payloads
+			// from drowning the log.
+			slog.Warn("write_file rejected: empty path",
+				"raw_args_preview", previewRawArgs(rawArgs),
+				"raw_args_bytes", len(rawArgs),
+				"content_bytes", len(args.Content),
+			)
+			return "", fmt.Errorf("path is required (got empty or whitespace-only string); pass a filename like \"report.html\" or an absolute path")
+		}
+
 		fullPath := resolvePath(workspace, args.Path)
+
+		// Guard 2: refuse to overwrite an existing directory. Covers
+		// the workspace-root degenerate case (path=".", "./", or any
+		// resolution that lands on a directory) AND stray attempts
+		// to clobber a real subdirectory. Without this we'd hand the
+		// model the cryptic "open <dir>: is a directory" again.
+		if info, err := os.Stat(fullPath); err == nil && info.IsDir() {
+			return "", fmt.Errorf("path %q resolves to an existing directory (%s); pick a filename inside it, not the directory itself", args.Path, fullPath)
+		}
+
 		dir := filepath.Dir(fullPath)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", fmt.Errorf("create directory: %w", err)

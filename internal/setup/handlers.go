@@ -80,7 +80,16 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 				resp["channels"] = channelList
 			}
 
-			// Agent info with model details
+			// Agent info with model details. Model names are normalised
+			// through normalizeModel so the gateway-status response always
+			// carries the explicit "<provider>/<model>" form. Without this,
+			// agents whose model in agent.json was authored without a
+			// prefix (e.g. legacy "deepseek-v4-pro") would surface a
+			// prefix-less entry in the chat page's model picker, which in
+			// turn breaks the per-message override flow because the
+			// provider Registry can't route an unprefixed name to the
+			// right backend reliably (see issue: kimi agent + override =
+			// silent failure).
 			if s.agentProvider == nil {
 				// Not running - get agent list from config
 				resolved := config.ResolveAgents(cfg)
@@ -88,7 +97,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 				for _, ra := range resolved {
 					agentList = append(agentList, map[string]string{
 						"id":        ra.ID,
-						"model":     ra.Model,
+						"model":     normalizeModel(ra.Model, cfg),
 						"workspace": ra.Workspace,
 					})
 				}
@@ -99,7 +108,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 				modelMap := make(map[string]string)
 				wsMap := make(map[string]string)
 				for _, ra := range resolved {
-					modelMap[ra.ID] = ra.Model
+					modelMap[ra.ID] = normalizeModel(ra.Model, cfg)
 					wsMap[ra.ID] = ra.Workspace
 				}
 				var agentList []map[string]string

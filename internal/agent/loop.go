@@ -29,6 +29,15 @@ type Agent struct {
 	name              string
 	providerMu        sync.RWMutex
 	provider          provider.Provider
+	// providerRegistry lets the agent re-route per-call when the user
+	// overrides the model from the chat UI (modelOverride). Without it
+	// the bound `provider` field is the only choice, which means a
+	// kimi-bound agent that gets switched to deepseek-v4-pro for a
+	// single message would still send the request to the kimi backend
+	// and fail silently. Optional — set via SetProviderRegistry; if
+	// nil we fall back to the bound provider, preserving legacy
+	// single-provider behaviour.
+	providerRegistry  *provider.Registry
 	registry          *tools.Registry
 	sessions          *session.Manager
 	memory            *Memory
@@ -69,6 +78,42 @@ func (a *Agent) setProvider(prov provider.Provider) {
 	a.providerMu.Lock()
 	defer a.providerMu.Unlock()
 	a.provider = prov
+}
+
+// SetProviderRegistry attaches the shared provider registry so the
+// agent can route per-call when ctx carries a model override that
+// targets a different upstream than the agent's bound default. Safe
+// to call once after construction; subsequent calls just swap the
+// pointer.
+func (a *Agent) SetProviderRegistry(reg *provider.Registry) {
+	a.providerMu.Lock()
+	defer a.providerMu.Unlock()
+	a.providerRegistry = reg
+}
+
+// effectiveProvider returns the provider that should serve the next
+// LLM call. When ctx carries a model override AND the registry has a
+// concrete provider for that model's prefix, we use it; otherwise we
+// fall back to the agent's bound provider. This mirrors the routing
+// done in agent.Manager at construction time, so a chat-UI override
+// like kimi→deepseek-v4-pro actually hits the deepseek backend rather
+// than silently 4xx-ing through whichever provider the kimi agent
+// happened to be wired to.
+func (a *Agent) effectiveProvider(ctx context.Context) provider.Provider {
+	override := ModelFromContext(ctx)
+	if override == "" {
+		return a.getProvider()
+	}
+	a.providerMu.RLock()
+	reg := a.providerRegistry
+	a.providerMu.RUnlock()
+	if reg == nil {
+		return a.getProvider()
+	}
+	if p := reg.For(override); p != nil {
+		return p
+	}
+	return a.getProvider()
 }
 
 // NewAgent creates a new Agent from a resolved config.
@@ -571,15 +616,28 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 
 		llmMessages = filterOrphanedToolCalls(llmMessages)
 
-		resp, err := a.getProvider().Chat(ctx, llmMessages, toolDefs, effectiveModel(ctx, a.model), a.maxTokens, a.temperature)
+		// Use effectiveProvider so a per-call modelOverride routes to the
+		// matching upstream — kimi-bound agents being switched to a
+		// deepseek model from the chat UI used to silently fail because
+		// the bound provider stayed pinned to kimi's API base.
+		resp, err := a.effectiveProvider(ctx).Chat(ctx, llmMessages, toolDefs, effectiveModel(ctx, a.model), a.maxTokens, a.temperature)
 
 		// Hook: AfterModelCall
 		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime}
 		a.hooks.Run(ctx, hcAfter)
 
 		if err != nil {
-			slog.Error("LLM chat failed", "agent", a.name, "error", err)
-			return "Sorry, I encountered an error processing your request."
+			slog.Error("LLM chat failed", "agent", a.name, "error", err, "model", effectiveModel(ctx, a.model))
+			// Surface the error to the UI as both a content event and a
+			// terminal `done` event. Without these the SSE stream stays
+			// open with no payload — the user sees the "Thinking…" dots
+			// forever and assumes the gateway is dead. Including the
+			// model name in the message helps the user recognise the
+			// "wrong-model-for-this-provider" override mistake.
+			errMsg := fmt.Sprintf("⚠️ LLM request failed (model=%s): %s", effectiveModel(ctx, a.model), err.Error())
+			emitEvent(ctx, ChatEvent{Type: "content", Data: map[string]any{"content": errMsg}})
+			emitEvent(ctx, ChatEvent{Type: "done"})
+			return errMsg
 		}
 
 		if !resp.HasToolCalls() {
@@ -918,19 +976,22 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 		hcBefore := &HookContext{AgentName: a.name, Point: BeforeModelCall, Messages: messages}
 		a.hooks.Run(ctx, hcBefore)
 
-		resp, err := a.getProvider().Chat(ctx, filterOrphanedToolCalls(messages), toolDefs, effectiveModel(ctx, a.model), a.maxTokens, a.temperature)
+		// effectiveProvider honours ctx-level model overrides (chat-UI
+		// model picker) so we don't pin to the agent's bound provider
+		// when the user explicitly chose a different one.
+		resp, err := a.effectiveProvider(ctx).Chat(ctx, filterOrphanedToolCalls(messages), toolDefs, effectiveModel(ctx, a.model), a.maxTokens, a.temperature)
 
 		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime}
 		a.hooks.Run(ctx, hcAfter)
 
 		if err != nil {
-			slog.Error("LLM chat failed", "agent", a.name, "error", err)
-			return a.stringStream("Sorry, I encountered an error processing your request.")
+			slog.Error("LLM chat failed", "agent", a.name, "error", err, "model", effectiveModel(ctx, a.model))
+			return a.stringStream(fmt.Sprintf("⚠️ LLM request failed (model=%s): %s", effectiveModel(ctx, a.model), err.Error()))
 		}
 
 		if !resp.HasToolCalls() {
 			// Final response - use streaming
-			sr, err := a.getProvider().ChatStream(ctx, filterOrphanedToolCalls(messages), toolDefs, effectiveModel(ctx, a.model), a.maxTokens, a.temperature)
+			sr, err := a.effectiveProvider(ctx).ChatStream(ctx, filterOrphanedToolCalls(messages), toolDefs, effectiveModel(ctx, a.model), a.maxTokens, a.temperature)
 			if err != nil {
 				slog.Error("LLM stream failed, falling back", "agent", a.name, "error", err)
 				sess.Append(provider.Message{Role: "assistant", Content: resp.Content})
