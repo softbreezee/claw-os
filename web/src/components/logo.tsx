@@ -23,12 +23,14 @@ export function Logo({ className }: LogoProps) {
       role="img"
       aria-label="Pawnix logo"
     >
-      {/* Panel: deep navy in dark mode, soft white in light mode */}
+      {/* Panel: deep navy in dark mode; transparent in light mode so the
+          logo sits flush against the page background instead of stamping
+          a gray square onto a white surface. */}
       <rect
         width="100"
         height="100"
         rx="22"
-        className="fill-slate-50 dark:fill-[#0B1120]"
+        className="fill-transparent dark:fill-[#0B1120]"
       />
 
       {/* Outer signal ring */}

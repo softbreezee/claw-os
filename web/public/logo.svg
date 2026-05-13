@@ -1,12 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="128" height="128" role="img" aria-label="Pawnix logo">
   <style>
-    /* Default (dark mode): deep navy panel with mint cyan signal */
-    .panel { fill: #0B1120; }
+    /* Default (dark contexts): deep navy panel with mint cyan signal */
+    .panel  { fill: #0B1120; }
     .signal { stroke: #5EEAD4; fill: #5EEAD4; }
 
-    /* Light mode: warm white panel with deep teal signal */
+    /* Light contexts: drop the panel entirely so the icon sits flush
+       against the page background; signal becomes a deep teal that reads
+       on light surfaces. */
     @media (prefers-color-scheme: light) {
-      .panel  { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1; }
+      .panel  { fill: none; }
       .signal { stroke: #0d9488; fill: #0d9488; }
     }
   </style>
