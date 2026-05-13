@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/sandbox"
+	"github.com/softbreezee/claw-os/internal/sandbox"
 )
 
 type execArgs struct {
@@ -187,7 +187,7 @@ func makeExecToolFull(sbCfg *SandboxConfig, envProvider SkillEnvProvider, skillD
 		//
 		// `sh -c …` exits immediately, but the spawned python inherits
 		// the cmd.Stdout / cmd.Stderr pipe fds (the file redirect only
-		// rebinds python's own stdout — the inherited fastclaw-side
+		// rebinds python's own stdout — the inherited pawnix-side
 		// pipe fd survives because Go reuses it). cmd.CombinedOutput
 		// then waits on EOF that never comes and the agent loop hangs
 		// indefinitely. WaitDelay tells exec.Cmd to force-close those

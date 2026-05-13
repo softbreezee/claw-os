@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/fastclaw-ai/fastclaw/internal/agent"
-	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/agent"
+	"github.com/softbreezee/claw-os/internal/agent/tools"
+	"github.com/softbreezee/claw-os/internal/bus"
+	"github.com/softbreezee/claw-os/internal/config"
 )
 
 // chatKey returns the serialization key for a chat.

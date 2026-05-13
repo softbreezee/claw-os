@@ -149,7 +149,7 @@ func makeWriteFile(workspace string) ToolFunc {
 		// silently joins to the workspace root via filepath.Join,
 		// and the workspace root is itself a directory — the OS
 		// then returns the famously opaque "is a directory" error
-		// (see /Users/.../.fastclaw/agents/<id>/agent crash mode).
+		// (see /Users/.../.pawnix/agents/<id>/agent crash mode).
 		// Reject early with a message the model can act on.
 		if strings.TrimSpace(args.Path) == "" {
 			// Forensic log: when this fires we want to see what the

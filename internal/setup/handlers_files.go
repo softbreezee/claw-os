@@ -4,7 +4,7 @@ package setup
 //
 // Two needs share this code:
 //
-//   1. Render images the user just uploaded (live in ~/.fastclaw/uploads).
+//   1. Render images the user just uploaded (live in ~/.pawnix/uploads).
 //   2. Render images / documents the agent itself produced inside its
 //      workspace directory.
 //
@@ -23,7 +23,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/config"
 )
 
 // GET /api/files?kind=upload&path=<sha>.png
@@ -120,7 +120,7 @@ func (s *Server) handleServeFile(w http.ResponseWriter, r *http.Request) {
 //
 // Why a server-side handler at all? Web clients can't shell out, and
 // `file://` URLs are blocked by every modern browser. The user is
-// already trusting fastclaw to run arbitrary tools, so launching a
+// already trusting pawnix to run arbitrary tools, so launching a
 // file explorer on the same host is well within scope.
 func (s *Server) handleOpenWorkspace(w http.ResponseWriter, r *http.Request) {
 	agentID := r.URL.Query().Get("agentId")

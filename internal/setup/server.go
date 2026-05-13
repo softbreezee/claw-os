@@ -12,18 +12,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/agent"
-	"github.com/fastclaw-ai/fastclaw/internal/api"
-	"github.com/fastclaw-ai/fastclaw/internal/config"
-	"github.com/fastclaw-ai/fastclaw/internal/eventbus"
-	"github.com/fastclaw-ai/fastclaw/internal/store"
-	"github.com/fastclaw-ai/fastclaw/internal/taskqueue"
-	"github.com/fastclaw-ai/fastclaw/internal/taskrunner"
-	"github.com/fastclaw-ai/fastclaw/internal/upload"
+	"github.com/softbreezee/claw-os/internal/agent"
+	"github.com/softbreezee/claw-os/internal/api"
+	"github.com/softbreezee/claw-os/internal/config"
+	"github.com/softbreezee/claw-os/internal/eventbus"
+	"github.com/softbreezee/claw-os/internal/store"
+	"github.com/softbreezee/claw-os/internal/taskqueue"
+	"github.com/softbreezee/claw-os/internal/taskrunner"
+	"github.com/softbreezee/claw-os/internal/upload"
 )
 
 // uploadStore returns the lazily-initialised attachment store rooted
-// at ~/.fastclaw/uploads. We don't fail server startup on init errors
+// at ~/.pawnix/uploads. We don't fail server startup on init errors
 // because the rest of the API (chat, status, agents…) should keep
 // working even when the upload dir is somehow unavailable; only the
 // chat-with-attachments path will then return an error.

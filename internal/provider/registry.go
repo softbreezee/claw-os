@@ -6,10 +6,10 @@ import (
 )
 
 // Registry holds one Provider instance per configured provider name
-// (matching the keys under config.Providers in fastclaw.json).
+// (matching the keys under config.Providers in pawnix.json).
 //
 // Why this exists:
-//   Earlier versions of fastclaw built a single global Provider from
+//   Earlier versions of pawnix built a single global Provider from
 //   the "default" entry. That meant every agent — regardless of its
 //   model field — sent its requests to the same upstream API. As soon
 //   as a user configured two providers (e.g. deepseek + openai/moonshot)

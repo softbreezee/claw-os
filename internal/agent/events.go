@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/softbreezee/claw-os/internal/bus"
 )
 
 // ChatEvent represents a real-time event emitted during the agent ReAct loop.

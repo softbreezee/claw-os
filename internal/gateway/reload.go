@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/agent"
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
-	"github.com/fastclaw-ai/fastclaw/internal/channels"
-	"github.com/fastclaw-ai/fastclaw/internal/config"
-	"github.com/fastclaw-ai/fastclaw/internal/cron"
+	"github.com/softbreezee/claw-os/internal/agent"
+	"github.com/softbreezee/claw-os/internal/bus"
+	"github.com/softbreezee/claw-os/internal/channels"
+	"github.com/softbreezee/claw-os/internal/config"
+	"github.com/softbreezee/claw-os/internal/cron"
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -33,7 +33,7 @@ func (g *Gateway) startConfigWatcher(ctx context.Context, wg *sync.WaitGroup) {
 		slog.Error("cannot determine config dir for watcher", "error", err)
 		return
 	}
-	configPath := filepath.Join(homeDir, "fastclaw.json")
+	configPath := filepath.Join(homeDir, "pawnix.json")
 	configDir := filepath.Dir(configPath)
 
 	if err := watcher.Add(configDir); err != nil {
@@ -74,7 +74,7 @@ func (g *Gateway) startConfigWatcher(ctx context.Context, wg *sync.WaitGroup) {
 			filename := filepath.Base(event.Name)
 
 			// Determine what changed
-			isConfig := filename == "fastclaw.json"
+			isConfig := filename == "pawnix.json"
 			isWorkspaceFile := isWatchedWorkspaceFile(filename)
 
 			if !isConfig && !isWorkspaceFile {

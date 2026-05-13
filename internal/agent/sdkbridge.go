@@ -12,8 +12,8 @@ import (
 	sdktools "github.com/codeany-ai/open-agent-sdk-go/tools"
 	sdktypes "github.com/codeany-ai/open-agent-sdk-go/types"
 
-	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	"github.com/softbreezee/claw-os/internal/agent/tools"
+	"github.com/softbreezee/claw-os/internal/provider"
 )
 
 // readOnlyTools lists tools that are safe to run concurrently.
@@ -26,7 +26,7 @@ var readOnlyTools = map[string]bool{
 	"load_skill":    true,
 }
 
-// toolAdapter wraps a FastClaw tool as an SDK Tool interface.
+// toolAdapter wraps a Pawnix tool as an SDK Tool interface.
 type toolAdapter struct {
 	name        string
 	description string
@@ -38,7 +38,7 @@ func (t *toolAdapter) Name() string        { return t.name }
 func (t *toolAdapter) Description() string  { return t.description }
 
 func (t *toolAdapter) InputSchema() sdktypes.ToolInputSchema {
-	// Convert FastClaw params (interface{}) to SDK ToolInputSchema
+	// Convert Pawnix params (interface{}) to SDK ToolInputSchema
 	if t.params == nil {
 		return sdktypes.ToolInputSchema{Type: "object"}
 	}
@@ -54,7 +54,7 @@ func (t *toolAdapter) InputSchema() sdktypes.ToolInputSchema {
 }
 
 func (t *toolAdapter) Call(ctx context.Context, input map[string]interface{}, tCtx *sdktypes.ToolUseContext) (*sdktypes.ToolResult, error) {
-	// Convert input map to JSON for FastClaw's ToolFunc
+	// Convert input map to JSON for Pawnix's ToolFunc
 	argsJSON, err := json.Marshal(input)
 	if err != nil {
 		return &sdktypes.ToolResult{IsError: true, Error: err.Error()}, nil
@@ -105,7 +105,7 @@ func newSDKEngine(sessionID string) *sdkEngine {
 	}
 }
 
-// buildSDKRegistry converts FastClaw's tool registry into an SDK registry.
+// buildSDKRegistry converts Pawnix's tool registry into an SDK registry.
 func buildSDKRegistry(fcRegistry *tools.Registry) *sdktools.Registry {
 	sdkReg := sdktools.NewRegistry()
 	for _, def := range fcRegistry.Definitions() {
@@ -139,7 +139,7 @@ func (e *sdkEngine) executeToolsConcurrently(ctx context.Context, fcRegistry *to
 		AbortCtx:   ctx,
 	})
 
-	// Convert FastClaw tool calls to SDK format.
+	// Convert Pawnix tool calls to SDK format.
 	//
 	// Historically a JSON parse failure here fell back to wrapping
 	// the whole raw string under {"_raw": "..."} and shipping it on
@@ -203,7 +203,7 @@ func (e *sdkEngine) executeToolsConcurrently(ctx context.Context, fcRegistry *to
 	responses := executor.RunTools(ctx, calls)
 	e.costTracker.AddToolDuration(time.Since(start))
 
-	// Convert SDK responses back to FastClaw format. We use
+	// Convert SDK responses back to Pawnix format. We use
 	// sdkToOrig to write each response into its original slot in
 	// `results`, so JSON-parse failures earlier in the loop don't
 	// shift indices and corrupt the response/tool_call pairing.

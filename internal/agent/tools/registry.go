@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	"github.com/softbreezee/claw-os/internal/provider"
 )
 
 // ToolFunc is a function that executes a tool with JSON arguments and returns a result string.

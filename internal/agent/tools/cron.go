@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/store"
+	"github.com/softbreezee/claw-os/internal/store"
 )
 
 type createCronJobArgs struct {

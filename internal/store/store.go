@@ -1,4 +1,4 @@
-// Package store provides a pluggable storage backend for FastClaw.
+// Package store provides a pluggable storage backend for Pawnix.
 // Default: file-based (single-user). For cloud multi-tenant: database-backed.
 package store
 
@@ -9,7 +9,7 @@ import (
 )
 
 // Store is the unified interface for all persistent data.
-// File-based impl reads/writes to ~/.fastclaw; DB impl uses SQL tables with tenant isolation.
+// File-based impl reads/writes to ~/.pawnix; DB impl uses SQL tables with tenant isolation.
 type Store interface {
 	// Config
 	GetConfig(ctx context.Context, tenantID string) (*TenantConfig, error)
@@ -84,7 +84,7 @@ type CronJobRecord struct {
 	CreatedAt time.Time  `json:"createdAt"`
 }
 
-// TenantConfig holds the full config for a tenant (maps to fastclaw.json for file store).
+// TenantConfig holds the full config for a tenant (maps to pawnix.json for file store).
 type TenantConfig struct {
 	TenantID  string                 `json:"tenantId"`
 	Data      map[string]interface{} `json:"data"` // raw config JSON

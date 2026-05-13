@@ -7,7 +7,7 @@
 //     deduplicates automatically. Cheaper than chasing per-task GC.
 //
 //   * Files live on the local filesystem under
-//     ~/.fastclaw/uploads/<sha>.<ext>. The path is what gets stored
+//     ~/.pawnix/uploads/<sha>.<ext>. The path is what gets stored
 //     in session messages (cheap to persist), and we only base64-inline
 //     the bytes when actually building an LLM request.
 //
@@ -18,7 +18,7 @@
 //     network-reachability problem.
 //
 //   * Best-effort retention: nothing here cleans old files yet (the
-//     larger Stage 3 plan covers that). For now `du -sh ~/.fastclaw/uploads`
+//     larger Stage 3 plan covers that). For now `du -sh ~/.pawnix/uploads`
 //     is the user's monitoring tool.
 package upload
 
@@ -41,7 +41,7 @@ type Store struct {
 
 // NewStore opens (and creates if missing) an upload directory rooted
 // at the given path. Typically the caller passes
-// filepath.Join(homeDir, ".fastclaw", "uploads").
+// filepath.Join(homeDir, ".pawnix", "uploads").
 func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("upload: mkdir %q: %w", dir, err)

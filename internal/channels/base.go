@@ -3,7 +3,7 @@ package channels
 import (
 	"context"
 
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/softbreezee/claw-os/internal/bus"
 )
 
 // Channel is the interface that all channel implementations must satisfy.
@@ -12,7 +12,7 @@ type Channel interface {
 	Name() string
 	// AccountID returns the account identifier within the channel.
 	AccountID() string
-	// BotUsername returns the bot's username for this channel (e.g. "mike_fastclaw_bot").
+	// BotUsername returns the bot's username for this channel (e.g. "mike_pawnix_bot").
 	// Returns empty string if not applicable.
 	BotUsername() string
 	// Start begins listening for messages. It should block until ctx is cancelled.

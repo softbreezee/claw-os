@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useTheme } from "@/components/theme-provider";
+import { Logo } from "@/components/logo";
 
 const navGroups = [
   {
@@ -120,9 +121,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
       <aside className="hidden w-56 flex-col border-r border-border bg-card/30 md:flex shrink-0">
         {/* Logo / status */}
         <div className="flex h-14 items-center gap-3 border-b border-border px-4">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary/10">
-            <img src="/logo.svg" alt="" className="h-8 w-8 rounded-xl" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-          </div>
+          <Logo className="h-8 w-8 shrink-0 rounded-xl" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-foreground leading-tight">Pawnix</p>
             <div className="flex items-center gap-1.5 mt-0.5">
@@ -157,9 +156,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
       {/* ── Mobile header ── */}
       <div className="fixed top-0 left-0 right-0 z-40 flex h-12 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur-md md:hidden">
         <div className="flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
-            <img src="/logo.svg" alt="" className="h-7 w-7 rounded-lg" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-          </div>
+          <Logo className="h-7 w-7 rounded-lg" />
           <span className="text-sm font-semibold text-foreground">Pawnix</span>
           <span className={`h-1.5 w-1.5 rounded-full ${gatewayRunning ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
         </div>

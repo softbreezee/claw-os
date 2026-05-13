@@ -10,11 +10,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
-	"github.com/fastclaw-ai/fastclaw/internal/plugin"
+	"github.com/softbreezee/claw-os/internal/config"
+	"github.com/softbreezee/claw-os/internal/plugin"
 )
 
-const hubRepo = "fastclaw-ai/fastclaw"
+const hubRepo = "softbreezee/claw-os"
 
 // pluginCmd handles plugin management subcommands.
 func pluginCmd() *cobra.Command {
@@ -89,10 +89,10 @@ func pluginInstallCmd() *cobra.Command {
 		Short: "Install a plugin from Pawnix Hub, GitHub, npm, or local path",
 		Long: `Install a plugin. The source is auto-detected:
 
-  fastclaw plugins install telegram                        # Pawnix Hub
-  fastclaw plugins install github.com/user/repo            # GitHub repo
-  fastclaw plugins install @ollama/web-search              # npm plugin (bridged)
-  fastclaw plugins install ./my-plugin                     # local directory`,
+  pawnix plugins install telegram                        # Pawnix Hub
+  pawnix plugins install github.com/user/repo            # GitHub repo
+  pawnix plugins install @ollama/web-search              # npm plugin (bridged)
+  pawnix plugins install ./my-plugin                     # local directory`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			source := args[0]
@@ -170,7 +170,7 @@ func installFromGitHub(source, pluginsDir string) error {
 	repoURL := "https://github.com/" + repo
 
 	// Clone to temp dir
-	tmpDir, err := os.MkdirTemp("", "fastclaw-plugin-*")
+	tmpDir, err := os.MkdirTemp("", "pawnix-plugin-*")
 	if err != nil {
 		return err
 	}
@@ -186,7 +186,7 @@ func installFromGitHub(source, pluginsDir string) error {
 }
 
 func installFromHub(name, pluginsDir string) error {
-	tmpDir, err := os.MkdirTemp("", "fastclaw-plugin-*")
+	tmpDir, err := os.MkdirTemp("", "pawnix-plugin-*")
 	if err != nil {
 		return err
 	}
@@ -213,7 +213,7 @@ func installFromHub(name, pluginsDir string) error {
 		return fmt.Errorf("extract failed: %s: %w", string(out), err)
 	}
 
-	// Find top-level dir (name varies: fastclaw-main, fastclaw-v0.16.0, etc.)
+	// Find top-level dir (name varies: pawnix-main, pawnix-v0.16.0, etc.)
 	entries, _ := os.ReadDir(extractDir)
 	if len(entries) == 0 {
 		return fmt.Errorf("extract failed: empty archive")
@@ -249,10 +249,10 @@ func installFromNpm(pkg, pluginsDir string) error {
 	if i := strings.LastIndex(pluginID, "/"); i >= 0 {
 		pluginID = pluginID[i+1:]
 	}
-	pluginID = strings.TrimPrefix(pluginID, "fastclaw-")
+	pluginID = strings.TrimPrefix(pluginID, "pawnix-")
 
 	// 1. npm install to temp dir to inspect the package
-	tmpDir, err := os.MkdirTemp("", "fastclaw-npm-*")
+	tmpDir, err := os.MkdirTemp("", "pawnix-npm-*")
 	if err != nil {
 		return err
 	}
@@ -265,21 +265,21 @@ func installFromNpm(pkg, pluginsDir string) error {
 		return fmt.Errorf("npm install failed: %s: %w", string(out), err)
 	}
 
-	// 2. Check if it's a compatible plugin (supports fastclaw or openclaw plugin format)
+	// 2. Check if it's a compatible plugin (supports pawnix or openclaw plugin format)
 	pkgDir := filepath.Join(tmpDir, "node_modules", pkg)
 	isPlugin := false
-	for _, marker := range []string{"fastclaw.plugin.json", "openclaw.plugin.json"} {
+	for _, marker := range []string{"pawnix.plugin.json", "openclaw.plugin.json"} {
 		if _, err := os.Stat(filepath.Join(pkgDir, marker)); err == nil {
 			isPlugin = true
 			break
 		}
 	}
-	// Also check package.json for fastclaw/openclaw field
+	// Also check package.json for pawnix/openclaw field
 	if !isPlugin {
 		if data, err := os.ReadFile(filepath.Join(pkgDir, "package.json")); err == nil {
 			var pj map[string]json.RawMessage
 			if json.Unmarshal(data, &pj) == nil {
-				for _, key := range []string{"fastclaw", "openclaw"} {
+				for _, key := range []string{"pawnix", "openclaw"} {
 					if _, ok := pj[key]; ok {
 						isPlugin = true
 						break

@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/softbreezee/claw-os/internal/bus"
 )
 
 // AgentHandler processes messages and returns responses.

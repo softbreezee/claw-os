@@ -38,7 +38,7 @@ func NewCredentialManager(passphrase string) (*CredentialManager, error) {
 		return nil, fmt.Errorf("get home dir: %w", err)
 	}
 
-	storeDir := filepath.Join(home, ".fastclaw")
+	storeDir := filepath.Join(home, ".pawnix")
 	if err := os.MkdirAll(storeDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create store dir: %w", err)
 	}
@@ -241,7 +241,7 @@ func deriveKey(passphrase string) []byte {
 		// Use machine-derived key from hostname + home dir
 		hostname, _ := os.Hostname()
 		home, _ := os.UserHomeDir()
-		passphrase = "fastclaw:" + hostname + ":" + home
+		passphrase = "pawnix:" + hostname + ":" + home
 	}
 	hash := sha256.Sum256([]byte(passphrase))
 	return hash[:]

@@ -3,13 +3,13 @@ package bus
 // Attachment represents a file attached to an inbound message — image,
 // (in future) PDF, audio, etc.
 //
-// Path is a fastclaw-local filesystem path produced by internal/upload.
+// Path is a pawnix-local filesystem path produced by internal/upload.
 // We deliberately do NOT carry inline bytes through the bus: large
 // payloads pollute logs, blow up channel buffers, and make persistence
 // in the session store wasteful. The agent loop reads bytes on demand
 // when building the LLM request.
 type Attachment struct {
-	Path     string // absolute local path, e.g. ~/.fastclaw/uploads/<sha>.png
+	Path     string // absolute local path, e.g. ~/.pawnix/uploads/<sha>.png
 	MimeType string // e.g. "image/png", "application/pdf"
 	Name     string // original filename for display purposes
 	Size     int64  // bytes (informational; the file on disk is the source of truth)

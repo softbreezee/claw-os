@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/agent"
-	"github.com/fastclaw-ai/fastclaw/internal/eventbus"
-	"github.com/fastclaw-ai/fastclaw/internal/store"
+	"github.com/softbreezee/claw-os/internal/agent"
+	"github.com/softbreezee/claw-os/internal/eventbus"
+	"github.com/softbreezee/claw-os/internal/store"
 )
 
 // fakeAgent simulates an Agent for tests. The behaviour func receives

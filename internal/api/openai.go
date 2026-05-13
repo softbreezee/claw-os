@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/agent"
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/softbreezee/claw-os/internal/agent"
+	"github.com/softbreezee/claw-os/internal/bus"
 )
 
 // chatCompletionRequest mirrors the OpenAI chat completion request.
@@ -83,7 +83,7 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve agent from header
-	agentID := r.Header.Get("x-fastclaw-agent-id")
+	agentID := r.Header.Get("x-pawnix-agent-id")
 	ag := s.resolveAgent(agentID)
 	if ag == nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{
@@ -93,7 +93,7 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build session key from header
-	sessionKey := r.Header.Get("x-fastclaw-session-key")
+	sessionKey := r.Header.Get("x-pawnix-session-key")
 	if sessionKey == "" {
 		sessionKey = "api-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	}

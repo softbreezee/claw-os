@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/config"
 )
 
 // sessionCmd handles session management subcommands.

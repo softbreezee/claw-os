@@ -180,7 +180,7 @@ export default function SettingsPage() {
               <Input
                 value={dsn}
                 onChange={(e) => setDsn(e.target.value)}
-                placeholder={storageType === "sqlite" ? "./data.db" : "postgres://user:pass@host:5432/fastclaw"}
+                placeholder={storageType === "sqlite" ? "./data.db" : "postgres://user:pass@host:5432/pawnix"}
                 className="font-mono text-sm"
               />
             </div>
@@ -246,7 +246,7 @@ export default function SettingsPage() {
               </div>
               <p className="text-sm text-muted-foreground">
                 Context window & compaction thresholds per model. Saves to{" "}
-                <code className="text-xs bg-muted px-1 rounded">~/.fastclaw/model-catalog.json</code>.
+                <code className="text-xs bg-muted px-1 rounded">~/.pawnix/model-catalog.json</code>.
                 Changes take effect after Save and Reload.
               </p>
             </div>

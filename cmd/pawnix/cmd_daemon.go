@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fastclaw-ai/fastclaw/internal/daemon"
+	"github.com/softbreezee/claw-os/internal/daemon"
 )
 
 // daemonCmd handles daemon/service management subcommands.

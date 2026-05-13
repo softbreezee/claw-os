@@ -42,7 +42,7 @@ func upgradeCmd() *cobra.Command {
 }
 
 func doUpgrade() error {
-	const repo = "fastclaw-ai/fastclaw"
+	const repo = "softbreezee/claw-os"
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 
 	fmt.Println("⚡ Checking for updates...")
@@ -82,9 +82,9 @@ func doUpgrade() error {
 	goarch := runtime.GOARCH
 	var suffix string
 	if goos == "windows" {
-		suffix = fmt.Sprintf("fastclaw_%s_%s.zip", goos, goarch)
+		suffix = fmt.Sprintf("pawnix_%s_%s.zip", goos, goarch)
 	} else {
-		suffix = fmt.Sprintf("fastclaw_%s_%s.tar.gz", goos, goarch)
+		suffix = fmt.Sprintf("pawnix_%s_%s.tar.gz", goos, goarch)
 	}
 
 	var downloadURL string
@@ -107,7 +107,7 @@ func doUpgrade() error {
 	}
 	defer dlResp.Body.Close()
 
-	tmpFile, err := os.CreateTemp("", "fastclaw-update-*")
+	tmpFile, err := os.CreateTemp("", "pawnix-update-*")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
@@ -121,7 +121,7 @@ func doUpgrade() error {
 	tmpFile.Close()
 
 	// 5. Extract binary
-	tmpDir, err := os.MkdirTemp("", "fastclaw-extract-*")
+	tmpDir, err := os.MkdirTemp("", "pawnix-extract-*")
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}
@@ -149,9 +149,9 @@ func doUpgrade() error {
 	}
 	currentBin, _ = filepath.EvalSymlinks(currentBin)
 
-	binaryName := "fastclaw"
+	binaryName := "pawnix"
 	if goos == "windows" {
-		binaryName = "fastclaw.exe"
+		binaryName = "pawnix.exe"
 	}
 	newBin := filepath.Join(tmpDir, binaryName)
 

@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/fastclaw-ai/fastclaw/internal/modelcatalog"
+	"github.com/softbreezee/claw-os/internal/modelcatalog"
 )
 
 // GET /api/model-catalog — return the current catalog (as editable JSON).

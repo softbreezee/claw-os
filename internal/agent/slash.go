@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/softbreezee/claw-os/internal/bus"
 )
 
 // slashResult holds the result of a slash command.

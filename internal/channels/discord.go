@@ -8,7 +8,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/softbreezee/claw-os/internal/bus"
 )
 
 var discordMentionRe = regexp.MustCompile(`<@!?(\d+)>`)

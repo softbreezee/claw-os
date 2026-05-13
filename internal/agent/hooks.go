@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	"github.com/softbreezee/claw-os/internal/provider"
 )
 
 // HookPoint identifies where in the agent loop a hook fires.

@@ -8,7 +8,7 @@
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.1%20foundation-f59e0b)](#-roadmap)
+[![Status](https://img.shields.io/badge/status-v0.2%20rebrand-5eead4)](#-roadmap)
 
 Multi-agent · Multi-channel · Long-term memory · Skills that learn · Plugins · MCP · Cron · Web dashboard
 
@@ -27,14 +27,12 @@ Pawnix is **not just an agent runtime** — it's a long-running, self-hosted lay
 - **Multi-channel by default.** Same agents, reachable from your browser, Telegram, Discord, Slack, or any custom plugin channel.
 - **Persistent memory.** `MEMORY.md` + searchable conversation logs + pgvector semantic memory. Your agent actually remembers you.
 - **Skills that grow.** Drop a `SKILL.md` and your agent can do new things; agents can also learn new skills from interaction patterns.
-- **Local-first, cloud-optional.** Defaults to plain JSON files in `~/.fastclaw/`. Switch to PostgreSQL or SQLite when you outgrow files.
+- **Local-first, cloud-optional.** Defaults to plain JSON files in `~/.pawnix/`. Switch to PostgreSQL or SQLite when you outgrow files.
 - **Single binary.** No Docker required, no Python venv, no Node runtime. Cross-compiles for macOS / Linux / Windows.
 
-> Pawnix evolved from the FastClaw codebase. The binary is still `fastclaw` and the config dir is still `~/.fastclaw/` for v0.1 — see [Roadmap](#-roadmap) for the deep rename plan.
-
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fastclaw-ai/fastclaw/main/install.sh | bash
-fastclaw    # Opens the setup wizard in your browser
+curl -fsSL https://raw.githubusercontent.com/softbreezee/claw-os/main/install.sh | bash
+pawnix    # Opens the setup wizard in your browser
 ```
 
 ---
@@ -43,7 +41,7 @@ fastclaw    # Opens the setup wizard in your browser
 
 Pawnix is built in five layers, each adding a capability that an "AI OS" needs.
 
-### **v0.1 — Foundation** &nbsp;`← you are here`
+### **v0.1 — Foundation**
 
 > *The runtime. Every later milestone builds on this.*
 
@@ -56,7 +54,17 @@ Pawnix is built in five layers, each adding a capability that an "AI OS" needs.
 - [x] Web dashboard at `:18953` for everything
 - [x] Daemon supervisor with crash auto-restart and `restart-aware` exit codes
 
-### **v0.2 — The Memory OS** &nbsp;*next*
+### **v0.2 — The Pawnix Rebrand** &nbsp;`← you are here`
+
+> *Surface and depth, both renamed. From FastClaw to Pawnix.*
+
+- [x] Binary `pawnix` · config dir `~/.pawnix/` · config file `pawnix.json`
+- [x] Go module `github.com/softbreezee/claw-os`
+- [x] New paw-print-in-signal-ring logo + favicon
+- [x] All UI / CLI / agent identity / install scripts use the new name
+- [x] launchd / systemd service labels updated to `ai.pawnix.gateway` / `pawnix-gateway.service`
+
+### **v0.3 — The Memory OS** &nbsp;*next*
 
 > *Make the agent remember you, not just facts.*
 
@@ -66,7 +74,7 @@ Pawnix is built in five layers, each adding a capability that an "AI OS" needs.
 - [ ] Memory browser UI: visualize, edit, and prune what each agent knows
 - [ ] Skill auto-induction: turn frequent prompt patterns into callable skills
 
-### **v0.3 — Multi-modal & Voice**
+### **v0.4 — Multi-modal & Voice**
 
 > *Stop requiring a keyboard.*
 
@@ -75,7 +83,7 @@ Pawnix is built in five layers, each adding a capability that an "AI OS" needs.
 - [ ] First-class file ingestion (PDF / video / Excel → memory)
 - [ ] Native voice messages and image streams in Telegram channel
 
-### **v0.4 — Agent Marketplace**
+### **v0.5 — Agent Marketplace**
 
 > *From "my agent" to "an ecosystem."*
 
@@ -84,7 +92,7 @@ Pawnix is built in five layers, each adding a capability that an "AI OS" needs.
 - [ ] Community catalog and rating
 - [ ] Marketplaced plugins (Obsidian-style)
 
-### **v0.5 — Distributed Mesh**
+### **v0.6 — Distributed Mesh**
 
 > *From "on my laptop" to "across all my devices."*
 
@@ -108,39 +116,39 @@ Pawnix is built in five layers, each adding a capability that an "AI OS" needs.
 ### One-liner (macOS / Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fastclaw-ai/fastclaw/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/softbreezee/claw-os/main/install.sh | bash
 ```
 
 ### Windows
 
-Download the `.zip` from [Releases](https://github.com/fastclaw-ai/fastclaw/releases), extract, and double-click `fastclaw.exe`.
+Download the `.zip` from [Releases](https://github.com/softbreezee/claw-os/releases), extract, and double-click `pawnix.exe`.
 
 ### From source
 
 ```bash
-git clone https://github.com/fastclaw-ai/fastclaw.git
-cd fastclaw && make build
+git clone https://github.com/softbreezee/claw-os.git
+cd claw-os && make build
 ```
 
 ### Quick environment setup (development)
 
 ```bash
-git clone https://github.com/fastclaw-ai/fastclaw.git
-cd fastclaw
+git clone https://github.com/softbreezee/claw-os.git
+cd claw-os
 ./setup.sh          # checks Go, Node, PostgreSQL — installs only if you opt in
 ```
 
 ### Upgrade
 
 ```bash
-fastclaw upgrade
+pawnix upgrade
 ```
 
 ---
 
 ## 🚀 Quick Start
 
-1. Run `fastclaw` — your browser opens the setup wizard at `http://localhost:18953`.
+1. Run `pawnix` — your browser opens the setup wizard at `http://localhost:18953`.
 2. Pick an LLM provider (OpenAI, Anthropic, or any OpenAI-compatible endpoint).
 3. Click **Launch** — start chatting in the browser.
 4. Open **Channels** in the sidebar, click **Add channel**, paste a Telegram bot token and bind it to an agent. Hit **Save & Restart**. Done.
@@ -167,7 +175,7 @@ fastclaw upgrade
 
 | Backend | Notes |
 |---------|-------|
-| **File** | Default. JSON in `~/.fastclaw/`. Zero setup. |
+| **File** | Default. JSON in `~/.pawnix/`. Zero setup. |
 | **PostgreSQL** | Multi-tenant + `pgvector` HNSW for semantic memory |
 | **SQLite** | Lightweight, with FTS5 full-text search |
 
@@ -230,13 +238,13 @@ Web dashboard · OpenAI-compatible REST API (`/v1/chat/completions` SSE) · WebS
                    ┌─────── daemon supervisor (crash + restart aware) ───────┐
 ```
 
-The daemon supervisor (`fastclaw daemon __run`) wraps the gateway in a restart loop and recognises **exit code 75** as "restart-on-purpose" (used by the **Save & Restart** button), so config changes apply atomically without manual restarts.
+The daemon supervisor (`pawnix daemon __run`) wraps the gateway in a restart loop and recognises **exit code 75** as "restart-on-purpose" (used by the **Save & Restart** button), so config changes apply atomically without manual restarts.
 
 ---
 
 ## 🔧 Configuration
 
-Pawnix reads `~/.fastclaw/fastclaw.json` on startup.
+Pawnix reads `~/.pawnix/pawnix.json` on startup.
 
 ### Storage
 
@@ -244,7 +252,7 @@ Pawnix reads `~/.fastclaw/fastclaw.json` on startup.
 {
   "storage": {
     "type": "postgres",
-    "dsn": "postgres://user:pass@localhost:5432/fastclaw?sslmode=disable",
+    "dsn": "postgres://user:pass@localhost:5432/pawnix?sslmode=disable",
     "autoMigrate": true
   }
 }
@@ -317,12 +325,12 @@ Pawnix plugins are subprocesses that speak JSON-RPC 2.0 over stdin/stdout — wr
 **Plugin types:** `channel` · `tool` · `provider` · `hook`
 
 ```bash
-fastclaw plugins install telegram                 # from Pawnix Hub
-fastclaw plugins install github.com/user/repo     # from a GitHub repo
-fastclaw plugins install ./my-plugin              # from a local directory
+pawnix plugins install telegram                 # from Pawnix Hub
+pawnix plugins install github.com/user/repo     # from a GitHub repo
+pawnix plugins install ./my-plugin              # from a local directory
 ```
 
-Official plugins live in [`plugins/`](plugins/). Community plugins are indexed at [Pawnix Hub](https://github.com/fastclaw-ai/fastclaw-hub).
+Official plugins live in [`plugins/`](plugins/).
 
 ---
 
@@ -369,33 +377,33 @@ ws.send(JSON.stringify({ type: 'chat', message: 'hello' }));
 
 ```bash
 # Core
-fastclaw                      # Start (setup wizard or gateway)
-fastclaw gateway              # Start gateway explicitly
-fastclaw version              # Version info
-fastclaw doctor               # Check config health
-fastclaw upgrade              # Update to latest
+pawnix                      # Start (setup wizard or gateway)
+pawnix gateway              # Start gateway explicitly
+pawnix version              # Version info
+pawnix doctor               # Check config health
+pawnix upgrade              # Update to latest
 
 # Daemon
-fastclaw daemon start         # Start as background daemon
-fastclaw daemon stop          # Stop
-fastclaw daemon restart       # Restart
-fastclaw daemon status        # Status check
+pawnix daemon start         # Start as background daemon
+pawnix daemon stop          # Stop
+pawnix daemon restart       # Restart
+pawnix daemon status        # Status check
 
 # Plugins
-fastclaw plugins install NAME
-fastclaw plugins list
-fastclaw plugins remove ID
+pawnix plugins install NAME
+pawnix plugins list
+pawnix plugins remove ID
 
 # Agents
-fastclaw agent create <name>
-fastclaw agent list
+pawnix agent create <name>
+pawnix agent list
 
 # Other
-fastclaw migrate              # Migrate JSONL sessions → PostgreSQL
-fastclaw session ...
-fastclaw provider ...
-fastclaw policy ...
-fastclaw backup
+pawnix migrate              # Migrate JSONL sessions → PostgreSQL
+pawnix session ...
+pawnix provider ...
+pawnix policy ...
+pawnix backup
 ```
 
 ---
@@ -403,8 +411,8 @@ fastclaw backup
 ## 🛠 Development
 
 ```bash
-git clone https://github.com/fastclaw-ai/fastclaw.git
-cd fastclaw
+git clone https://github.com/softbreezee/claw-os.git
+cd claw-os
 
 ./setup.sh           # check (or install) Go, Node, PostgreSQL
 
@@ -418,9 +426,9 @@ make test
 ### Workspace structure
 
 ```
-~/.fastclaw/
-├── fastclaw.json           # Main config
-├── fastclaw.pid            # Daemon PID (single source of truth)
+~/.pawnix/
+├── pawnix.json             # Main config
+├── pawnix.pid              # Daemon PID (single source of truth)
 ├── logs/gateway.log        # Daemon log
 ├── agents/<id>/agent/      # SOUL / MEMORY / IDENTITY / sessions / skills / ...
 └── plugins/                # Installed plugins
@@ -436,15 +444,20 @@ make test
 
 Contributions welcome. Pawnix's strength is **simplicity** — keep it that way.
 
-- **Core framework & official plugins** — contribute to this repo
-- **Community plugins** — open your own repo, then submit it to [Pawnix Hub](https://github.com/fastclaw-ai/fastclaw-hub)
-
 ## License
 
 [MIT](LICENSE)
 
+## 🙏 Acknowledgements
+
+Pawnix stands on the shoulders of [**fastclaw-ai/fastclaw**](https://github.com/fastclaw-ai/fastclaw).
+
+This project began as a fork of FastClaw and evolved into a self-hosted AI-Native personal OS. The entire v0.1 Foundation — multi-LLM provider routing, multi-agent gateway, channels (Telegram / Discord / Slack), the skill system, plugin protocol, MCP client, dual-layer memory, daemon supervisor, web dashboard scaffolding — all originated in or grew directly out of FastClaw's design and code.
+
+Huge thanks to the FastClaw authors for building such a clean, hackable foundation, and for releasing it under MIT so projects like this one are even possible. If you like Pawnix, please go give the [original repo](https://github.com/fastclaw-ai/fastclaw) a star.
+
 ---
 
 <div align="center">
-  <sub>Built with 🐾 by the Pawnix community</sub>
+  <sub>Built with 🐾 by the Pawnix community · Forked with gratitude from <a href="https://github.com/fastclaw-ai/fastclaw">FastClaw</a></sub>
 </div>

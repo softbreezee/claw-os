@@ -150,7 +150,7 @@ type SkillsLearnerCfg struct {
 	Model        string `json:"model,omitempty"`        // override model
 }
 
-// Config is the top-level configuration loaded from ~/.fastclaw/fastclaw.json.
+// Config is the top-level configuration loaded from ~/.pawnix/pawnix.json.
 type Config struct {
 	Providers  map[string]ProviderConfig  `json:"providers"`
 	Agents     AgentsConfig               `json:"agents"`
@@ -174,7 +174,7 @@ type Config struct {
 }
 
 // AppEntry represents a quick-launch web app shown on the Apps page.
-// It's pure UI sugar — fastclaw doesn't fetch or proxy these URLs;
+// It's pure UI sugar — pawnix doesn't fetch or proxy these URLs;
 // clicking opens the URL in a new tab. Useful for keeping companion
 // dashboards (like surge.sh-hosted analysis tools) one click away.
 type AppEntry struct {
@@ -361,13 +361,13 @@ type TeamConfig struct {
 	Routing map[string]string `json:"routing"`
 }
 
-// HomeDir returns the FastClaw home directory (~/.fastclaw).
+// HomeDir returns the Pawnix home directory (~/.pawnix).
 func HomeDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".fastclaw"), nil
+	return filepath.Join(home, ".pawnix"), nil
 }
 
 func expandPath(path string) string {
@@ -381,14 +381,14 @@ func expandPath(path string) string {
 	return path
 }
 
-// Load reads and parses ~/.fastclaw/fastclaw.json.
+// Load reads and parses ~/.pawnix/pawnix.json.
 func Load() (*Config, error) {
 	homeDir, err := HomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("get home dir: %w", err)
 	}
 
-	configPath := filepath.Join(homeDir, "fastclaw.json")
+	configPath := filepath.Join(homeDir, "pawnix.json")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", configPath, err)
@@ -428,7 +428,7 @@ func (cfg *Config) MergedAgentConfig(entry AgentEntry) ResolvedAgent {
 	// tools.resolvePath, exec.cmd.Dir, sessions.Manager) never fall
 	// back to the daemon's cwd. This is the root cause of the
 	// historical bug where MEMORY.md / HISTORY.md / write_file output
-	// would land in the source repo when fastclaw was launched from
+	// would land in the source repo when pawnix was launched from
 	// `go run ./...` inside the checkout.
 	if abs, err := filepath.Abs(workspace); err == nil {
 		workspace = abs

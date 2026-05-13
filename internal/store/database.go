@@ -18,8 +18,8 @@ type DBStore struct {
 
 // NewDBStore creates a database-backed store.
 // dsn examples:
-//   postgres: "postgres://user:pass@host:5432/fastclaw?sslmode=disable"
-//   sqlite:   "file:fastclaw.db?_journal=WAL"
+//   postgres: "postgres://user:pass@host:5432/pawnix?sslmode=disable"
+//   sqlite:   "file:pawnix.db?_journal=WAL"
 func NewDBStore(dialect, dsn string) (*DBStore, error) {
 	// Import drivers via blank import in the caller (main.go) or use pgx/stdlib.
 	// Here we use database/sql which requires the driver to be registered.

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// FileStore implements Store using the local filesystem (~/.fastclaw/).
+// FileStore implements Store using the local filesystem (~/.pawnix/).
 // This is the default for single-user self-hosted mode.
 type FileStore struct {
 	homeDir string
@@ -26,7 +26,7 @@ func (f *FileStore) Close() error { return nil }
 // --- Config ---
 
 func (f *FileStore) GetConfig(ctx context.Context, tenantID string) (*TenantConfig, error) {
-	path := filepath.Join(f.homeDir, "fastclaw.json")
+	path := filepath.Join(f.homeDir, "pawnix.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -44,7 +44,7 @@ func (f *FileStore) GetConfig(ctx context.Context, tenantID string) (*TenantConf
 }
 
 func (f *FileStore) SaveConfig(ctx context.Context, tenantID string, cfg *TenantConfig) error {
-	path := filepath.Join(f.homeDir, "fastclaw.json")
+	path := filepath.Join(f.homeDir, "pawnix.json")
 	data, err := json.MarshalIndent(cfg.Data, "", "  ")
 	if err != nil {
 		return err
@@ -53,7 +53,7 @@ func (f *FileStore) SaveConfig(ctx context.Context, tenantID string, cfg *Tenant
 }
 
 func (f *FileStore) DeleteConfig(ctx context.Context, tenantID string) error {
-	return os.Remove(filepath.Join(f.homeDir, "fastclaw.json"))
+	return os.Remove(filepath.Join(f.homeDir, "pawnix.json"))
 }
 
 // --- Agents ---

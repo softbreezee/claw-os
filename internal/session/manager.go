@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	"github.com/softbreezee/claw-os/internal/provider"
 )
 
 // RemoteStore is an optional backend that persists sessions in addition to

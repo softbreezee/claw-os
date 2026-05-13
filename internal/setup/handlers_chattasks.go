@@ -12,10 +12,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
-	"github.com/fastclaw-ai/fastclaw/internal/eventbus"
-	"github.com/fastclaw-ai/fastclaw/internal/store"
-	"github.com/fastclaw-ai/fastclaw/internal/taskrunner"
+	"github.com/softbreezee/claw-os/internal/bus"
+	"github.com/softbreezee/claw-os/internal/eventbus"
+	"github.com/softbreezee/claw-os/internal/store"
+	"github.com/softbreezee/claw-os/internal/taskrunner"
 )
 
 // maxAttachmentBytes caps a single uploaded file. 25 MiB is comfortably

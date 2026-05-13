@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	"github.com/softbreezee/claw-os/internal/bus"
+	"github.com/softbreezee/claw-os/internal/provider"
 )
 
 // isVisionModel reports whether the named model can directly consume
@@ -48,7 +48,7 @@ func isVisionModel(model string) bool {
 // to the model as text ("[attached: filename.pdf]") so the agent at
 // least knows they were sent and can decide whether to call a tool.
 //
-// Images are inlined as base64 data: URLs rather than fastclaw-hosted
+// Images are inlined as base64 data: URLs rather than pawnix-hosted
 // HTTP URLs because most upstream LLM APIs need to fetch attachments
 // from their own servers, and a localhost gateway URL won't be
 // reachable. Inlining sidesteps that whole class of problem.
@@ -166,7 +166,7 @@ func buildUserMessage(msg bus.InboundMessage, model string) provider.Message {
 // reference indices later in tool calls.
 //
 // Critically, we expose each attachment's REAL on-disk absolute path
-// (typically ~/.fastclaw/uploads/<sha>.<ext>) — without it the agent
+// (typically ~/.pawnix/uploads/<sha>.<ext>) — without it the agent
 // has no way to read non-image attachments (md / pdf / csv …) and
 // historically guessed `<workspace>/<filename>`, which never resolves.
 //
@@ -182,9 +182,9 @@ func buildUserMessage(msg bus.InboundMessage, model string) provider.Message {
 //
 //   [Attached files]
 //   [0] text/markdown — analysis.md (4 KB)
-//       path: /Users/liuyang42/.fastclaw/uploads/ab12…cd.md
+//       path: /Users/liuyang42/.pawnix/uploads/ab12…cd.md
 //   [1] image/png — diagram.png (124 KB)
-//       path: /Users/liuyang42/.fastclaw/uploads/ef34…56.png
+//       path: /Users/liuyang42/.pawnix/uploads/ef34…56.png
 //
 //   To read documents, call read_file with the path above.
 //   To analyse images, this model cannot see them directly — call

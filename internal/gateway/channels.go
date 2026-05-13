@@ -1,9 +1,9 @@
 package gateway
 
 import (
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
-	"github.com/fastclaw-ai/fastclaw/internal/channels"
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/bus"
+	"github.com/softbreezee/claw-os/internal/channels"
+	"github.com/softbreezee/claw-os/internal/config"
 )
 
 // registerChannels creates channel instances from config, one per account.

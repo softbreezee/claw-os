@@ -20,7 +20,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>("dark");
 
   useEffect(() => {
-    const stored = localStorage.getItem("fastclaw-theme") as Theme | null;
+    const stored = localStorage.getItem("pawnix-theme") as Theme | null;
     const initial = stored === "light" ? "light" : "dark";
     setTheme(initial);
     document.documentElement.classList.toggle("dark", initial === "dark");
@@ -31,7 +31,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // Add transition class for smooth color change
     document.documentElement.classList.add("theme-transition");
     setTheme(next);
-    localStorage.setItem("fastclaw-theme", next);
+    localStorage.setItem("pawnix-theme", next);
     document.documentElement.classList.toggle("dark", next === "dark");
     // Remove transition class after animation completes
     setTimeout(() => {

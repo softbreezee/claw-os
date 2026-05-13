@@ -29,7 +29,7 @@ type DockerSandbox struct {
 // NewDockerSandbox creates a new sandbox configuration (container is created lazily).
 func NewDockerSandbox(image, workspace string, policy *Policy) *DockerSandbox {
 	if image == "" {
-		image = "fastclaw/sandbox:latest"
+		image = "pawnix/sandbox:latest"
 	}
 	if policy == nil {
 		policy = &Policy{NetMode: "none"}
@@ -63,7 +63,7 @@ func (s *DockerSandbox) Create() error {
 	args := []string{
 		"create",
 		"--interactive",
-		"--label", "fastclaw=sandbox",
+		"--label", "pawnix=sandbox",
 	}
 
 	// Mount workspace

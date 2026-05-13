@@ -1,7 +1,7 @@
 package gateway
 
 import (
-	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/softbreezee/claw-os/internal/agent"
 )
 
 // groupBehaviorFor determines the group behavior and default agent for a set of agents.

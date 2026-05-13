@@ -19,20 +19,20 @@ import (
 	// `sql: unknown driver "pgx"`.
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/fastclaw-ai/fastclaw/internal/agent"
-	"github.com/fastclaw-ai/fastclaw/internal/api"
-	"github.com/fastclaw-ai/fastclaw/internal/config"
-	"github.com/fastclaw-ai/fastclaw/internal/daemon"
-	"github.com/fastclaw-ai/fastclaw/internal/eventbus"
-	"github.com/fastclaw-ai/fastclaw/internal/gateway"
-	"github.com/fastclaw-ai/fastclaw/internal/setup"
-	"github.com/fastclaw-ai/fastclaw/internal/store"
-	"github.com/fastclaw-ai/fastclaw/internal/taskrunner"
+	"github.com/softbreezee/claw-os/internal/agent"
+	"github.com/softbreezee/claw-os/internal/api"
+	"github.com/softbreezee/claw-os/internal/config"
+	"github.com/softbreezee/claw-os/internal/daemon"
+	"github.com/softbreezee/claw-os/internal/eventbus"
+	"github.com/softbreezee/claw-os/internal/gateway"
+	"github.com/softbreezee/claw-os/internal/setup"
+	"github.com/softbreezee/claw-os/internal/store"
+	"github.com/softbreezee/claw-os/internal/taskrunner"
 )
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "fastclaw",
+		Use:   "pawnix",
 		Short: "Pawnix - Lightweight AI Agent Framework",
 		// No args = default to gateway (so double-click on Windows works)
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -171,7 +171,7 @@ func runGateway(port int) error {
 		"chatCompletions", gwCfg.HTTP.Endpoints.ChatCompletions.Enabled,
 	)
 
-	// Write fastclaw.gateway.json for ChatClaw auto-detect
+	// Write pawnix.gateway.json for ChatClaw auto-detect
 	writePawnixGatewayConfig(port, gatewayToken)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -226,7 +226,7 @@ func (r *chatTaskAgentResolver) AgentByID(id string) taskrunner.AgentHandle {
 	return ag
 }
 
-// writePawnixGatewayConfig writes ~/.fastclaw/fastclaw.gateway.json for ChatClaw auto-detect.
+// writePawnixGatewayConfig writes ~/.pawnix/pawnix.gateway.json for ChatClaw auto-detect.
 func writePawnixGatewayConfig(port int, token string) {
 	if token == "" {
 		return
@@ -235,7 +235,7 @@ func writePawnixGatewayConfig(port int, token string) {
 	if err != nil {
 		return
 	}
-	dir := filepath.Join(home, ".fastclaw")
+	dir := filepath.Join(home, ".pawnix")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
@@ -249,10 +249,10 @@ func writePawnixGatewayConfig(port int, token string) {
 		},
 	}
 	data, _ := json.MarshalIndent(cfg, "", "  ")
-	if err := os.WriteFile(filepath.Join(dir, "fastclaw.gateway.json"), data, 0o644); err != nil {
-		slog.Warn("failed to write fastclaw.gateway.json", "error", err)
+	if err := os.WriteFile(filepath.Join(dir, "pawnix.gateway.json"), data, 0o644); err != nil {
+		slog.Warn("failed to write pawnix.gateway.json", "error", err)
 	} else {
-		slog.Info("wrote fastclaw.gateway.json for ChatClaw auto-detect")
+		slog.Info("wrote pawnix.gateway.json for ChatClaw auto-detect")
 	}
 }
 

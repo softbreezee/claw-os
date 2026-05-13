@@ -13,15 +13,15 @@ import (
 
 	"github.com/codeany-ai/open-agent-sdk-go/costtracker"
 
-	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
-	"github.com/fastclaw-ai/fastclaw/internal/config"
-	"github.com/fastclaw-ai/fastclaw/internal/mcp"
-	"github.com/fastclaw-ai/fastclaw/internal/modelcatalog"
-	"github.com/fastclaw-ai/fastclaw/internal/privacy"
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
-	"github.com/fastclaw-ai/fastclaw/internal/session"
-	"github.com/fastclaw-ai/fastclaw/internal/store"
+	"github.com/softbreezee/claw-os/internal/agent/tools"
+	"github.com/softbreezee/claw-os/internal/bus"
+	"github.com/softbreezee/claw-os/internal/config"
+	"github.com/softbreezee/claw-os/internal/mcp"
+	"github.com/softbreezee/claw-os/internal/modelcatalog"
+	"github.com/softbreezee/claw-os/internal/privacy"
+	"github.com/softbreezee/claw-os/internal/provider"
+	"github.com/softbreezee/claw-os/internal/session"
+	"github.com/softbreezee/claw-os/internal/store"
 )
 
 // Agent is the ReAct agent loop.

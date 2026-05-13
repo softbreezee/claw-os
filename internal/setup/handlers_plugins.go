@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/config"
 )
 
 // --- Plugins ---

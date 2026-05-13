@@ -29,12 +29,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/softbreezee/claw-os/internal/agent"
 	// busmsg alias avoids shadowing in `func New(.. bus eventbus.Bus ..)`
 	// where `bus` is a parameter name, not the package.
-	busmsg "github.com/fastclaw-ai/fastclaw/internal/bus"
-	"github.com/fastclaw-ai/fastclaw/internal/eventbus"
-	"github.com/fastclaw-ai/fastclaw/internal/store"
+	busmsg "github.com/softbreezee/claw-os/internal/bus"
+	"github.com/softbreezee/claw-os/internal/eventbus"
+	"github.com/softbreezee/claw-os/internal/store"
 )
 
 // AgentResolver finds an agent by ID. The taskrunner package does not

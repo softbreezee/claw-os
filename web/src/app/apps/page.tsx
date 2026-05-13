@@ -27,7 +27,7 @@ import { AppWindow, ExternalLink, Plus, Pencil, Trash2 } from "lucide-react";
 import { getApps, createApp, updateApp, deleteApp, type AppEntry } from "@/lib/api";
 
 // Apps page — a tiny bookmark manager for external web tools the user
-// wants reachable from inside fastclaw with one click. We deliberately
+// wants reachable from inside pawnix with one click. We deliberately
 // open the URL in a new tab rather than embed via iframe: surge.sh
 // pages and most modern web apps set X-Frame-Options / CSP that block
 // embedding, and a hard-disabled iframe is a worse UX than just opening

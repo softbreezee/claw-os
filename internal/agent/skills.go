@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,16 +35,17 @@ type SkillFrontmatter struct {
 }
 
 // SkillMetadata represents the skill metadata block.
-// Supports both "fastclaw" and "openclaw" keys for backward compatibility.
+// Prefers the "pawnix" key; falls back to "openclaw" since OpenClaw
+// skills authored by upstream are commonly redistributed.
 type SkillMetadata struct {
-	FastClaw *OpenClawMeta `json:"fastclaw"`
+	Pawnix   *OpenClawMeta `json:"pawnix"`
 	OpenClaw *OpenClawMeta `json:"openclaw"`
 }
 
-// Meta returns the effective metadata, preferring fastclaw over openclaw.
+// Meta returns the effective metadata, preferring pawnix over openclaw.
 func (m *SkillMetadata) Meta() *OpenClawMeta {
-	if m.FastClaw != nil {
-		return m.FastClaw
+	if m.Pawnix != nil {
+		return m.Pawnix
 	}
 	return m.OpenClaw
 }
@@ -72,7 +73,7 @@ type SkillRequires struct {
 type SkillsLoader struct {
 	homeDir   string
 	agentDir  string
-	agentID   string // for ~/.fastclaw/agents/<id>/agent/skills/ scoped skills
+	agentID   string // for ~/.pawnix/agents/<id>/agent/skills/ scoped skills
 	teamDir   string
 	skillsCfg config.SkillsConfig
 	globalCfg config.SkillsCfg
@@ -92,7 +93,7 @@ func NewSkillsLoader(homeDir, agentDir, teamDir string, skillsCfg config.SkillsC
 //
 // agentID may be empty for callers that don't have it on hand; passing
 // it enables a second per-agent skills source rooted at
-// ~/.fastclaw/agents/<agentID>/agent/skills/. That path is what the
+// ~/.pawnix/agents/<agentID>/agent/skills/. That path is what the
 // Web UI's "move skill to agent" flow targets, so it MUST be
 // discoverable by the runtime — otherwise the agent silently loses
 // access to skills the user thought were installed for it.
@@ -104,7 +105,7 @@ func NewSkillsLoaderWithGlobal(homeDir, agentDir, teamDir, agentID string, skill
 }
 
 // agentScopedSkillsDir returns the canonical per-agent skills location
-// under ~/.fastclaw/agents/<id>/agent/skills/, or "" when no agentID
+// under ~/.pawnix/agents/<id>/agent/skills/, or "" when no agentID
 // has been wired in (legacy callers).
 func (sl *SkillsLoader) agentScopedSkillsDir() string {
 	if sl.agentID == "" {
@@ -151,15 +152,15 @@ func (sl *SkillsLoader) LoadSkills() []Skill {
 		}
 	}
 
-	// Layer 3: managed skills (~/.fastclaw/managed-skills/)
-	managedDir := fastclawManagedDir()
+	// Layer 3: managed skills (~/.pawnix/managed-skills/)
+	managedDir := pawnixManagedDir()
 	for name, skill := range discoverSkillsEnhanced(managedDir, "managed") {
 		if !disabled[name] {
 			skills[name] = skill
 		}
 	}
 
-	// Layer 2: user installed (~/.fastclaw/skills/)
+	// Layer 2: user installed (~/.pawnix/skills/)
 	userDir := filepath.Join(sl.homeDir, "skills")
 	for name, skill := range discoverSkillsEnhanced(userDir, "user") {
 		if !disabled[name] {
@@ -177,7 +178,7 @@ func (sl *SkillsLoader) LoadSkills() []Skill {
 		}
 	}
 
-	// Layer 1.25: per-agent scoped skills under ~/.fastclaw/agents/<id>/agent/skills/.
+	// Layer 1.25: per-agent scoped skills under ~/.pawnix/agents/<id>/agent/skills/.
 	// This is where the Web UI's "move to agent" places skills, and
 	// where the Skills page lists them from. Without this layer the
 	// runtime silently ignores anything the user installed there —
@@ -289,7 +290,7 @@ func (sl *SkillsLoader) allSkillDirs() []string {
 		dirs = append(dirs, filepath.Join(sl.teamDir, "skills"))
 	}
 	dirs = append(dirs, filepath.Join(sl.homeDir, "skills"))
-	dirs = append(dirs, fastclawManagedDir())
+	dirs = append(dirs, pawnixManagedDir())
 	if b := builtinSkillsDir(); b != "" {
 		dirs = append(dirs, b)
 	}
@@ -542,14 +543,14 @@ func checkGating(meta *SkillMetadata) (bool, string) {
 	return false, ""
 }
 
-// fastclawManagedDir returns the FastClaw managed skills directory (~/.fastclaw/managed-skills/).
-// This is separate from user-installed skills (~/.fastclaw/skills/) to avoid layer collision.
-func fastclawManagedDir() string {
+// pawnixManagedDir returns the Pawnix managed skills directory (~/.pawnix/managed-skills/).
+// This is separate from user-installed skills (~/.pawnix/skills/) to avoid layer collision.
+func pawnixManagedDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".fastclaw", "managed-skills")
+	return filepath.Join(home, ".pawnix", "managed-skills")
 }
 
 // builtinSkillsDir locates the project-shipped skills/ directory by
@@ -561,7 +562,7 @@ func fastclawManagedDir() string {
 //
 // Probe order:
 //  1. {exeDir}/skills/      – installed layout (binary + skills side-by-side)
-//  2. {exeDir}/../skills/   – go run / dev (bin/fastclaw + ../skills/)
+//  2. {exeDir}/../skills/   – go run / dev (bin/pawnix + ../skills/)
 //  3. ./skills/             – CWD fallback
 func builtinSkillsDir() string {
 	candidates := []string{}

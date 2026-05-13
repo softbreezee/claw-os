@@ -3,7 +3,7 @@ package taskrunner
 import (
 	"log/slog"
 
-	"github.com/fastclaw-ai/fastclaw/internal/store"
+	"github.com/softbreezee/claw-os/internal/store"
 )
 
 // sessionQueue is a per-(agent, session) FIFO with its own worker

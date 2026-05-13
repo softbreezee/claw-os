@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
+	"github.com/softbreezee/claw-os/internal/agent/tools"
 )
 
 // RegisterPluginTools queries a tool plugin for its tools and registers them

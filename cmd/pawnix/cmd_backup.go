@@ -9,14 +9,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/config"
 )
 
-// backupCmd creates a tar.gz backup of ~/.fastclaw.
+// backupCmd creates a tar.gz backup of ~/.pawnix.
 func backupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "backup",
-		Short: "Create a tar.gz backup of ~/.fastclaw",
+		Short: "Create a tar.gz backup of ~/.pawnix",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			homeDir, err := config.HomeDir()
 			if err != nil {
@@ -24,7 +24,7 @@ func backupCmd() *cobra.Command {
 			}
 
 			timestamp := time.Now().Format("20060102-150405")
-			backupFile := fmt.Sprintf("fastclaw-backup-%s.tar.gz", timestamp)
+			backupFile := fmt.Sprintf("pawnix-backup-%s.tar.gz", timestamp)
 
 			tarCmd := exec.Command("tar", "-czf", backupFile, "-C", filepath.Dir(homeDir), filepath.Base(homeDir))
 			tarCmd.Stdout = os.Stdout

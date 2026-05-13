@@ -133,7 +133,7 @@ function rtKey(agentId: string, sessionId: string): string {
 // only persist the taskId; the messages array is reloaded from server
 // history on next mount, and the resume useEffect re-subscribes via the
 // taskId. This keeps localStorage tiny (one entry, ~50 bytes per task).
-const TASK_STORAGE_KEY = "fastclaw.chat.tasks.v1";
+const TASK_STORAGE_KEY = "pawnix.chat.tasks.v1";
 
 function loadPersistedTaskIds(): Record<string, string> {
   if (typeof window === "undefined") return {};

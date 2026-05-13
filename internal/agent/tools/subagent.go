@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/softbreezee/claw-os/internal/bus"
 )
 
 // SubAgentSpawner is the interface for spawning sub-agents.

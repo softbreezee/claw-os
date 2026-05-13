@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/store"
+	"github.com/softbreezee/claw-os/internal/store"
 )
 
 // FTSSearcher is the interface for FTS5-based memory search.

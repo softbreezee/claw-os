@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/modelcatalog"
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	"github.com/softbreezee/claw-os/internal/modelcatalog"
+	"github.com/softbreezee/claw-os/internal/provider"
 )
 
 const (

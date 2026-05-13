@@ -215,7 +215,7 @@ export interface ChatHistoryMessage {
 }
 
 // fileURL builds the URL for the local-file proxy. Use kind="upload"
-// for files in ~/.fastclaw/uploads and kind="workspace" for files in
+// for files in ~/.pawnix/uploads and kind="workspace" for files in
 // the current agent's workspace directory.
 export function fileURL(opts: { kind: "upload" | "workspace"; path: string; agentId?: string }): string {
   const params = new URLSearchParams({ kind: opts.kind, path: opts.path });
@@ -516,8 +516,8 @@ export async function deleteSkill(name: string) {
 }
 
 // Move a skill between writable layers.
-//   scope: "user"        – ~/.fastclaw/skills/ (shared)
-//   scope: "agent:<id>"  – ~/.fastclaw/agents/<id>/agent/skills/
+//   scope: "user"        – ~/.pawnix/skills/ (shared)
+//   scope: "agent:<id>"  – ~/.pawnix/agents/<id>/agent/skills/
 // Builtin skills cannot be moved (immutable; create a same-named override
 // in user/ or an agent workspace to take precedence at runtime).
 export async function moveSkill(name: string, scope: string): Promise<{ ok: boolean; location?: string; error?: string }> {

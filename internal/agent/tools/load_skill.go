@@ -15,7 +15,7 @@ type loadSkillArgs struct {
 // RegisterLoadSkill registers the load_skill tool that reads full SKILL.md content.
 //
 // agentID enables search of the per-agent scoped directory at
-// ~/.fastclaw/agents/<agentID>/agent/skills/, which is where the
+// ~/.pawnix/agents/<agentID>/agent/skills/, which is where the
 // Web UI's "move skill to agent" flow places skill files. Pass ""
 // to skip that lookup.
 //

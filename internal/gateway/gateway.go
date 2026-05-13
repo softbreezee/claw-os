@@ -12,16 +12,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/agent"
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
-	"github.com/fastclaw-ai/fastclaw/internal/channels"
-	"github.com/fastclaw-ai/fastclaw/internal/config"
-	"github.com/fastclaw-ai/fastclaw/internal/cron"
-	"github.com/fastclaw-ai/fastclaw/internal/plugin"
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
-	pgstore "github.com/fastclaw-ai/fastclaw/internal/store/pg"
-	"github.com/fastclaw-ai/fastclaw/internal/taskqueue"
-	"github.com/fastclaw-ai/fastclaw/internal/webhook"
+	"github.com/softbreezee/claw-os/internal/agent"
+	"github.com/softbreezee/claw-os/internal/bus"
+	"github.com/softbreezee/claw-os/internal/channels"
+	"github.com/softbreezee/claw-os/internal/config"
+	"github.com/softbreezee/claw-os/internal/cron"
+	"github.com/softbreezee/claw-os/internal/plugin"
+	"github.com/softbreezee/claw-os/internal/provider"
+	pgstore "github.com/softbreezee/claw-os/internal/store/pg"
+	"github.com/softbreezee/claw-os/internal/taskqueue"
+	"github.com/softbreezee/claw-os/internal/webhook"
 )
 
 // Gateway is the main orchestrator that starts all services.

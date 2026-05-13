@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/config"
 )
 
 func agentCmd() *cobra.Command {
@@ -99,7 +99,7 @@ func agentListCmd() *cobra.Command {
 			entries, err := os.ReadDir(agentsDir)
 			if err != nil {
 				if os.IsNotExist(err) {
-					fmt.Println("No agents found. Create one with: fastclaw agent create <name>")
+					fmt.Println("No agents found. Create one with: pawnix agent create <name>")
 					return nil
 				}
 				return err

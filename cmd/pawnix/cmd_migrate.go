@@ -11,16 +11,16 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
-	pgstore "github.com/fastclaw-ai/fastclaw/internal/store/pg"
+	"github.com/softbreezee/claw-os/internal/config"
+	"github.com/softbreezee/claw-os/internal/provider"
+	pgstore "github.com/softbreezee/claw-os/internal/store/pg"
 )
 
 func migrateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "migrate",
 		Short: "Migrate local JSONL sessions to PostgreSQL",
-		Long: `Reads all existing JSONL session files from ~/.fastclaw/agents/*/sessions/
+		Long: `Reads all existing JSONL session files from ~/.pawnix/agents/*/sessions/
 and upserts them into the PostgreSQL sessions table configured in storage.dsn.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runMigrate()

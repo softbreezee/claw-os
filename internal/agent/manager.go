@@ -4,9 +4,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/fastclaw-ai/fastclaw/internal/bus"
-	"github.com/fastclaw-ai/fastclaw/internal/config"
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	"github.com/softbreezee/claw-os/internal/bus"
+	"github.com/softbreezee/claw-os/internal/config"
+	"github.com/softbreezee/claw-os/internal/provider"
 )
 
 // Manager loads and manages all agent instances.
@@ -21,7 +21,7 @@ type Manager struct {
 // The provider Registry is the source of truth for routing: each
 // agent picks its provider by looking up the prefix of its model
 // (e.g. "openai/kimi-k2.6" -> registry["openai"]). This means a
-// single fastclaw instance can mix multiple LLM backends without
+// single pawnix instance can mix multiple LLM backends without
 // the awkward "every agent shares the same provider" hack the older
 // signature forced.
 func NewManager(resolved []config.ResolvedAgent, registry *provider.Registry, mb *bus.MessageBus) (*Manager, error) {

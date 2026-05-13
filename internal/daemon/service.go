@@ -38,7 +38,7 @@ func Uninstall() error {
 
 // --- macOS launchd ---
 
-const launchdLabel = "ai.fastclaw.gateway"
+const launchdLabel = "ai.pawnix.gateway"
 
 var launchdPlistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -85,7 +85,7 @@ func installLaunchd() error {
 		return err
 	}
 
-	logDir := filepath.Join(home, ".fastclaw", "logs")
+	logDir := filepath.Join(home, ".pawnix", "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return fmt.Errorf("create log dir: %w", err)
 	}
@@ -159,7 +159,7 @@ func uninstallLaunchd() error {
 
 // --- Linux systemd ---
 
-const systemdUnit = "fastclaw-gateway.service"
+const systemdUnit = "pawnix-gateway.service"
 
 var systemdUnitTemplate = template.Must(template.New("unit").Parse(`[Unit]
 Description=Pawnix AI Agent Gateway
@@ -199,7 +199,7 @@ func installSystemd() error {
 		return err
 	}
 
-	logDir := filepath.Join(home, ".fastclaw", "logs")
+	logDir := filepath.Join(home, ".pawnix", "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return fmt.Errorf("create log dir: %w", err)
 	}
@@ -289,10 +289,10 @@ func printWindowsInstructions() {
 	fmt.Println()
 	fmt.Println("Options:")
 	fmt.Println("  1. Use NSSM (Non-Sucking Service Manager):")
-	fmt.Println("     nssm install Pawnix <path-to-fastclaw.exe> gateway")
+	fmt.Println("     nssm install Pawnix <path-to-pawnix.exe> gateway")
 	fmt.Println()
 	fmt.Println("  2. Use Task Scheduler:")
 	fmt.Println("     - Open Task Scheduler")
-	fmt.Println("     - Create a new task that runs 'fastclaw.exe gateway'")
+	fmt.Println("     - Create a new task that runs 'pawnix.exe gateway'")
 	fmt.Println("     - Set it to run at startup")
 }

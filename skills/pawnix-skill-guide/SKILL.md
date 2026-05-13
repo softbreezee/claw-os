@@ -1,5 +1,5 @@
 ---
-name: fastclaw-skill-guide
+name: pawnix-skill-guide
 description: Create new skills for FastClaw agents. Use when the user asks to create a skill, turn a workflow into a skill, or build reusable automation. Also use when discussing skill format, structure, or best practices.
 ---
 

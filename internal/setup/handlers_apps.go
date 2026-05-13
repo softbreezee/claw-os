@@ -2,16 +2,16 @@ package setup
 
 // HTTP handlers for the Apps page — a simple registry of external web
 // apps the user wants one-click access to (e.g. surge.sh-hosted
-// dashboards, internal tools). fastclaw doesn't fetch or proxy these;
+// dashboards, internal tools). pawnix doesn't fetch or proxy these;
 // the SPA opens them in a new tab. The whole feature is just shared,
-// persistent bookmarks scoped to this fastclaw instance.
+// persistent bookmarks scoped to this pawnix instance.
 
 import (
 	"encoding/json"
 	"net/http"
 	"strings"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/config"
 )
 
 // GET /api/apps – list configured apps.

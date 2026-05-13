@@ -23,6 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { testProvider, saveConfig } from "@/lib/api";
+import { Logo } from "@/components/logo";
 
 const PROVIDERS: Record<string, { apiBase: string; apiType: string; models: string[] }> = {
   openrouter: {
@@ -286,7 +287,7 @@ export default function OnboardPage() {
           <Card className="backdrop-blur-sm">
             <CardHeader className="space-y-6 pb-4 text-center">
               <div className="mx-auto flex h-16 w-16 items-center justify-center">
-                <img src="/logo.svg" alt="Pawnix" className="h-16 w-16 rounded-2xl" />
+                <Logo className="h-16 w-16 rounded-2xl" />
               </div>
               <div>
                 <CardTitle className="text-3xl font-bold">

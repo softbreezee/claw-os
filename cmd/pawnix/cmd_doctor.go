@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/config"
 )
 
 // doctorCmd checks the config and environment for issues.
@@ -41,10 +41,10 @@ func runDoctor() error {
 	} else {
 		fmt.Printf("📂 Config dir: %s\n", homeDir)
 
-		configPath := filepath.Join(homeDir, "fastclaw.json")
+		configPath := filepath.Join(homeDir, "pawnix.json")
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			fmt.Printf("❌ Config file: not found (%s)\n", configPath)
-			fmt.Println("   → Run 'fastclaw' to start the setup wizard")
+			fmt.Println("   → Run 'pawnix' to start the setup wizard")
 			issues++
 		} else {
 			fmt.Printf("✅ Config file: %s\n", configPath)

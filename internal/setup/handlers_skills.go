@@ -8,15 +8,15 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
 // --- Skills ---
 //
 // Skills can live in several layers (mirrors agent.SkillsLoader):
-//   * agent workspace:    ~/.fastclaw/agents/{agentId}/agent/skills/
-//   * user-installed:     ~/.fastclaw/skills/
+//   * agent workspace:    ~/.pawnix/agents/{agentId}/agent/skills/
+//   * user-installed:     ~/.pawnix/skills/
 // In each layer a skill is either a subdirectory containing SKILL.md or
 // a single *.md file (the latter is the convention for short, one-shot
 // skills like tradingagents-ashare.md).
@@ -155,7 +155,7 @@ func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 //
 // Probed in order:
 //   1. {exeDir}/skills/         – installed layout
-//   2. {exeDir}/../skills/      – go run / dev (bin/fastclaw → repo root)
+//   2. {exeDir}/../skills/      – go run / dev (bin/pawnix → repo root)
 //   3. ./skills/                – CWD fallback
 func builtinSkillsDir() string {
 	candidates := []string{}
@@ -342,7 +342,7 @@ func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 			if _, sterr := os.Stat(p); sterr == nil {
 				jsonResponse(w, http.StatusForbidden, map[string]any{
 					"ok":    false,
-					"error": "cannot delete a builtin skill (override it under ~/.fastclaw/skills/ or an agent workspace instead)",
+					"error": "cannot delete a builtin skill (override it under ~/.pawnix/skills/ or an agent workspace instead)",
 				})
 				return
 			}
@@ -383,8 +383,8 @@ func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 // --- Move ---
 
 // moveSkillRequest specifies where to move a skill. Scope formats:
-//   "user"        – move to ~/.fastclaw/skills/ (shared across agents)
-//   "agent:<id>"  – move to ~/.fastclaw/agents/<id>/agent/skills/
+//   "user"        – move to ~/.pawnix/skills/ (shared across agents)
+//   "agent:<id>"  – move to ~/.pawnix/agents/<id>/agent/skills/
 type moveSkillRequest struct {
 	Scope string `json:"scope"`
 }
@@ -457,7 +457,7 @@ func (s *Server) handleMoveSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// os.Rename is atomic on the same filesystem and works for both files
-	// and directories. ~/.fastclaw is on one volume in normal installs.
+	// and directories. ~/.pawnix is on one volume in normal installs.
 	if err := os.Rename(srcPath, destPath); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return

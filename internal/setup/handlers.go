@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/config"
 )
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -25,7 +25,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	configPath := filepath.Join(homeDir, "fastclaw.json")
+	configPath := filepath.Join(homeDir, "pawnix.json")
 	_, statErr := os.Stat(configPath)
 	configured := statErr == nil
 
@@ -496,7 +496,7 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write config
-	configPath := filepath.Join(homeDir, "fastclaw.json")
+	configPath := filepath.Join(homeDir, "pawnix.json")
 	data, _ := json.MarshalIndent(cfg, "", "  ")
 	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
@@ -667,7 +667,7 @@ func generateRandomToken(length int) string {
 	b := make([]byte, length)
 	if _, err := rand.Read(b); err != nil {
 		// Fallback: this should never happen
-		return "fastclaw-default-token"
+		return "pawnix-default-token"
 	}
 	return hex.EncodeToString(b)
 }
@@ -721,13 +721,13 @@ func (s *Server) handleDaemonRestart(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// saveConfigFile persists the config to ~/.fastclaw/fastclaw.json.
+// saveConfigFile persists the config to ~/.pawnix/pawnix.json.
 func saveConfigFile(cfg *config.Config) error {
 	homeDir, err := config.HomeDir()
 	if err != nil {
 		return err
 	}
-	configPath := filepath.Join(homeDir, "fastclaw.json")
+	configPath := filepath.Join(homeDir, "pawnix.json")
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err

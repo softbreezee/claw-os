@@ -2,7 +2,7 @@
 // (context window, pricing tiers, etc.) used by the compaction engine and
 // cost tracker to make informed decisions.
 //
-// The registry is persisted as ~/.fastclaw/model-catalog.json and ships with
+// The registry is persisted as ~/.pawnix/model-catalog.json and ships with
 // sensible built-in defaults for common models. Users can edit it in the
 // Settings UI; changes take effect after manual reload or process restart.
 package modelcatalog
@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/softbreezee/claw-os/internal/config"
 )
 
 // ModelInfo holds key capabilities for a single model.

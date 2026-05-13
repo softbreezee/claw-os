@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# FastClaw 环境检查脚本
+# Pawnix 环境检查脚本
 # =============================================================================
 # 检查开发/运行所需依赖是否就绪，输出缺失项及安装指引。
 # 本脚本不会自动安装任何东西。
@@ -111,10 +111,10 @@ check_pgvector() {
 }
 
 check_config() {
-    if [ -f "$HOME/.fastclaw/fastclaw.json" ]; then
-        ok "配置文件 ~/.fastclaw/fastclaw.json"
+    if [ -f "$HOME/.pawnix/pawnix.json" ]; then
+        ok "配置文件 ~/.pawnix/pawnix.json"
     else
-        warn "配置文件不存在，首次启动 fastclaw 时会进入配置向导"
+        warn "配置文件不存在，首次启动 pawnix 时会进入配置向导"
     fi
 }
 
@@ -131,7 +131,7 @@ check_make() {
 main() {
     detect_os
 
-    printf "\n${BOLD}🔍 FastClaw 环境检查${NC}\n"
+    printf "\n${BOLD}🔍 Pawnix 环境检查${NC}\n"
     printf "──────────────────────────────────────\n"
 
     title "运行时依赖"
@@ -155,7 +155,7 @@ main() {
     echo "  1. 确保 Go 1.25+ 和 PostgreSQL 已就绪"
     echo "  2. 首次运行自动进入配置向导:"
     echo ""
-    echo "       go run ./cmd/fastclaw"
+    echo "       go run ./cmd/pawnix"
     echo ""
     echo "  或使用管理脚本（推荐开发阶段使用）:"
     echo ""
@@ -165,14 +165,14 @@ main() {
         echo ""
     fi
     echo "       make build                     # 编译项目"
-    echo "       ./fastclaw-manager.sh start    # 启动服务（后台 daemon）"
-    echo "       ./fastclaw-manager.sh status   # 查看服务状态"
-    echo "       ./fastclaw-manager.sh logs     # 实时查看日志"
-    echo "       ./fastclaw-manager.sh stop     # 停止服务"
+    echo "       ./pawnix-manager.sh start    # 启动服务（后台 daemon）"
+    echo "       ./pawnix-manager.sh status   # 查看服务状态"
+    echo "       ./pawnix-manager.sh logs     # 实时查看日志"
+    echo "       ./pawnix-manager.sh stop     # 停止服务"
     echo ""
     echo "  一键部署（构建 + 安装到全局 + 重启）:"
     echo ""
-    echo "       ./fastclaw-manager.sh deploy"
+    echo "       ./pawnix-manager.sh deploy"
     echo ""
 }
 
