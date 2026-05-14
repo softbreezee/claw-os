@@ -81,9 +81,11 @@ func makeNotificationWriter(st store.Store) func(ctx context.Context, agentID, s
 // This is the entry point that turns "scheduler fires → agent runs"
 // into something the user actually sees in the inbox.
 //
-// Title heuristic: the first line of the trigger prompt (truncated)
-// gives the user enough context to know "ah, that's my drink-water
-// reminder". Body is the agent's reply.
+// Title heuristic: the first line of the agent's REPLY (not the
+// cron trigger prompt). The trigger is system plumbing — what the
+// user wants to see in the inbox row preview is the agent's actual
+// message ("☀️ 早安~"), not the prompt that produced it ("发一句
+// 简短温暖的鼓励语. 根据当前时间..."). Body is the full reply.
 //
 // Source/Link policy is per-origin so the inbox can group/filter and
 // "open" a notification can deep-link the user back to the source
@@ -98,7 +100,7 @@ func writeOriginNotification(st store.Store, agentID string, in bus.InboundMessa
 		TenantID:  store.DefaultTenantID,
 		AgentID:   agentID,
 		Source:    source,
-		Title:     summariseTitle(source, in.Text),
+		Title:     summariseTitle(source, reply, in.Text),
 		Body:      strings.TrimSpace(reply),
 		CreatedAt: time.Now().UTC(),
 	}
@@ -115,12 +117,23 @@ func writeOriginNotification(st store.Store, agentID string, in bus.InboundMessa
 }
 
 // summariseTitle picks a short, human-meaningful title for the inbox
-// row. We prefer the first line of the trigger text (the cron job
-// message), capped to ~60 chars. Falls back to a per-source label
-// when the trigger is empty.
-func summariseTitle(source, trigger string) string {
-	t := strings.TrimSpace(trigger)
-	if t == "" {
+// row. Resolution order:
+//   1. First line of the agent reply (the actual content the user
+//      came to see).
+//   2. First line of the trigger prompt (fallback when the agent
+//      somehow returned an empty reply — debugging breadcrumb).
+//   3. A generic per-source label.
+//
+// Capped at ~80 visible chars + an ellipsis. The source icon
+// rendered by the UI already conveys the origin, but we keep a
+// leading emoji so the title still reads sensibly when copied
+// out of the notification (toast, browser title, etc).
+func summariseTitle(source, primary, fallback string) string {
+	pick := strings.TrimSpace(primary)
+	if pick == "" {
+		pick = strings.TrimSpace(fallback)
+	}
+	if pick == "" {
 		switch source {
 		case "cron":
 			return "Cron job triggered"
@@ -130,22 +143,22 @@ func summariseTitle(source, trigger string) string {
 			return "Agent message"
 		}
 	}
-	// First line only — multi-line cron messages happen but the row
+	// First line only — multi-line replies are common and the row
 	// preview only has space for one line.
-	if i := strings.IndexAny(t, "\r\n"); i > 0 {
-		t = t[:i]
+	if i := strings.IndexAny(pick, "\r\n"); i > 0 {
+		pick = pick[:i]
 	}
 	const maxLen = 80
-	if len([]rune(t)) > maxLen {
-		runes := []rune(t)
-		t = string(runes[:maxLen]) + "…"
+	if len([]rune(pick)) > maxLen {
+		runes := []rune(pick)
+		pick = string(runes[:maxLen]) + "…"
 	}
 	switch source {
 	case "cron":
-		return "⏰ " + t
+		return "⏰ " + pick
 	case "webhook":
-		return "🌐 " + t
+		return "🌐 " + pick
 	default:
-		return t
+		return pick
 	}
 }
