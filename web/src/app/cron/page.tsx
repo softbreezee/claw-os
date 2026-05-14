@@ -41,7 +41,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Clock, Play, Plus, Trash2 } from "lucide-react";
+import { Clock, Inbox, Play, Plus, Send, Hash, MessageCircle, Trash2 } from "lucide-react";
 import {
   getCronJobs,
   createCronJob,
@@ -49,13 +49,111 @@ import {
   deleteCronJob,
   runCronJobNow,
   getAgents,
+  getChannelsDetailed,
   type CronJobInfo,
   type AgentDetail,
+  type ChannelDetail,
 } from "@/lib/api";
+
+// DeliveryTarget describes one possible "where does the cron job
+// reply land" choice. Inbox is always available; one entry per
+// (channel, account) combo that has MyChatID configured.
+//
+// `value` is the wire form passed back when creating a job. It uses
+// "channel:accountId" so the form state is a single string.
+type DeliveryTarget = {
+  value: string;            // "inbox" | "telegram:main" | ...
+  label: string;            // "Inbox" | "Telegram (main → 8175643861)"
+  channel: string;          // "" for inbox
+  accountId: string;
+  chatId: string;
+  icon: React.ElementType;
+};
+
+const channelIcon = (channel: string): React.ElementType => {
+  switch (channel) {
+    case "telegram":
+      return Send;
+    case "discord":
+      return Hash;
+    case "slack":
+      return MessageCircle;
+    default:
+      return Inbox;
+  }
+};
+
+const channelColor = (channel: string): string => {
+  switch (channel) {
+    case "telegram":
+      return "text-blue-500";
+    case "discord":
+      return "text-indigo-500";
+    case "slack":
+      return "text-emerald-500";
+    default:
+      return "text-muted-foreground";
+  }
+};
+
+// channelDisplayName humanises the channel string for badges/options.
+const channelDisplayName = (channel: string): string => {
+  switch (channel) {
+    case "telegram":
+      return "Telegram";
+    case "discord":
+      return "Discord";
+    case "slack":
+      return "Slack";
+    case "":
+    case "web":
+      return "Inbox";
+    default:
+      return channel;
+  }
+};
+
+// buildDeliveryTargets walks the configured channels and returns the
+// dropdown choices: Inbox (always) + one row per (channel, account)
+// that has MyChatID set. Without MyChatID we still show the row but
+// disable it with a hint, so the user understands why telegram isn't
+// pickable yet.
+function buildDeliveryTargets(channels: ChannelDetail[]): Array<DeliveryTarget & { disabled?: boolean; disabledReason?: string }> {
+  const out: Array<DeliveryTarget & { disabled?: boolean; disabledReason?: string }> = [
+    {
+      value: "inbox",
+      label: "Inbox (browser toast + dashboard)",
+      channel: "",
+      accountId: "",
+      chatId: "",
+      icon: Inbox,
+    },
+  ];
+  for (const ch of channels) {
+    if (!ch.enabled) continue;
+    for (const acct of ch.accounts ?? []) {
+      const hasChatId = (acct.myChatId ?? "").trim() !== "";
+      out.push({
+        value: `${ch.type}:${acct.id}`,
+        label: hasChatId
+          ? `${channelDisplayName(ch.type)} (${acct.id} → ${acct.myChatId})`
+          : `${channelDisplayName(ch.type)} (${acct.id}) — set "My chat ID" in Channels`,
+        channel: ch.type,
+        accountId: acct.id,
+        chatId: acct.myChatId ?? "",
+        icon: channelIcon(ch.type),
+        disabled: !hasChatId,
+        disabledReason: hasChatId ? undefined : "Configure My chat ID in Channels first",
+      });
+    }
+  }
+  return out;
+}
 
 export default function CronPage() {
   const [jobs, setJobs] = useState<CronJobInfo[]>([]);
   const [agents, setAgents] = useState<AgentDetail[]>([]);
+  const [channels, setChannels] = useState<ChannelDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -66,17 +164,23 @@ export default function CronPage() {
   const [newType, setNewType] = useState("cron");
   const [newAgentId, setNewAgentId] = useState("");
   const [newMessage, setNewMessage] = useState("");
+  // newDelivery is the selected dropdown value ("inbox" or "channel:account").
+  // Looked up at submit time against the current channels list to populate
+  // the channel/accountId/chatId fields on the cron job record.
+  const [newDelivery, setNewDelivery] = useState("inbox");
 
   const fetchData = () => {
     setLoading(true);
-    Promise.all([getCronJobs(), getAgents()])
-      .then(([j, a]) => {
+    Promise.all([getCronJobs(), getAgents(), getChannelsDetailed()])
+      .then(([j, a, c]) => {
         setJobs(j);
         setAgents(a);
+        setChannels(c);
       })
       .catch(() => {
         setJobs([]);
         setAgents([]);
+        setChannels([]);
       })
       .finally(() => setLoading(false));
   };
@@ -85,15 +189,22 @@ export default function CronPage() {
     fetchData();
   }, []);
 
+  const deliveryTargets = buildDeliveryTargets(channels);
+
   const handleCreate = async () => {
     if (!newName.trim() || !newSchedule.trim()) return;
     setSaving(true);
+    const target = deliveryTargets.find((t) => t.value === newDelivery)
+      ?? deliveryTargets[0]; // fall back to Inbox
     await createCronJob({
       name: newName.trim(),
       type: newType,
       schedule: newSchedule.trim(),
       agentId: newAgentId,
       message: newMessage,
+      channel: target.channel,
+      accountId: target.accountId,
+      chatId: target.chatId,
       enabled: true,
     });
     setCreateOpen(false);
@@ -102,6 +213,7 @@ export default function CronPage() {
     setNewType("cron");
     setNewAgentId("");
     setNewMessage("");
+    setNewDelivery("inbox");
     setSaving(false);
     fetchData();
   };
@@ -207,6 +319,7 @@ export default function CronPage() {
                 <TableHead>Schedule</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Agent</TableHead>
+                <TableHead>Delivery</TableHead>
                 <TableHead>Last Run</TableHead>
                 <TableHead>Next Run</TableHead>
                 <TableHead>Enabled</TableHead>
@@ -214,7 +327,14 @@ export default function CronPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {jobs.map((job) => (
+              {jobs.map((job) => {
+                const ChannelIcon = channelIcon(job.channel);
+                // Delivery cell renders one of:
+                //   - "Inbox" (when channel is empty / 'web')
+                //   - "Telegram • main → 8175643861" (real IM)
+                // The chatId line uses font-mono since it's a literal
+                // identifier the user might want to verify at a glance.
+                return (
                 <TableRow key={job.id} className="hover:bg-muted/50 transition-colors">
                   <TableCell>
                     <div className="flex flex-col">
@@ -238,6 +358,19 @@ export default function CronPage() {
                   </TableCell>
                   <TableCell>
                     <span className="text-sm text-muted-foreground">{job.agentId || "-"}</span>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-start gap-2">
+                      <ChannelIcon className={`h-3.5 w-3.5 mt-0.5 shrink-0 ${channelColor(job.channel)}`} />
+                      <div className="flex flex-col">
+                        <span className="text-sm">{channelDisplayName(job.channel)}</span>
+                        {job.chatId && (
+                          <span className="text-[10px] text-muted-foreground font-mono leading-tight">
+                            {job.accountId ? `${job.accountId} → ` : ""}{job.chatId}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </TableCell>
                   <TableCell>
                     <span className="text-xs text-muted-foreground">
@@ -278,7 +411,8 @@ export default function CronPage() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
           </div>
@@ -341,6 +475,37 @@ export default function CronPage() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Delivery</Label>
+              <Select value={newDelivery} onValueChange={(v) => v && setNewDelivery(v)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Where to deliver" />
+                </SelectTrigger>
+                <SelectContent>
+                  {deliveryTargets.map((t) => {
+                    const TargetIcon = t.icon;
+                    return (
+                      <SelectItem
+                        key={t.value}
+                        value={t.value}
+                        disabled={t.disabled}
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <TargetIcon className={`h-3.5 w-3.5 ${channelColor(t.channel)}`} />
+                          {t.label}
+                        </span>
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Where the agent&apos;s reply will land when the schedule fires.
+                {deliveryTargets.length === 1 && (
+                  <> Configure a channel + My chat ID under <span className="font-medium">Channels</span> to push to Telegram / Slack / Discord.</>
+                )}
+              </p>
             </div>
             <div className="space-y-2">
               <Label>Message</Label>

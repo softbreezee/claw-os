@@ -97,8 +97,9 @@ export interface CronJobInfo {
   type: string;
   schedule: string;
   agentId: string;
-  channel: string;
-  chatId: string;
+  channel: string;       // "" / "web" / "telegram" / "slack" / "discord"
+  accountId: string;     // bot account within the channel, empty for web/Inbox
+  chatId: string;        // recipient address; empty for web/Inbox
   message: string;
   enabled: boolean;
   lastRun?: string;   // RFC3339; absent when never fired
