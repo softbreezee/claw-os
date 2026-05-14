@@ -19,6 +19,7 @@ import (
 	"github.com/softbreezee/claw-os/internal/cron"
 	"github.com/softbreezee/claw-os/internal/plugin"
 	"github.com/softbreezee/claw-os/internal/provider"
+	"github.com/softbreezee/claw-os/internal/store"
 	pgstore "github.com/softbreezee/claw-os/internal/store/pg"
 	"github.com/softbreezee/claw-os/internal/taskqueue"
 	"github.com/softbreezee/claw-os/internal/webhook"
@@ -40,7 +41,15 @@ type Gateway struct {
 	webhookSrv   *webhook.Server
 	pluginMgr    *plugin.Manager
 	taskQueue    *taskqueue.Queue
-	pgDB         *pgstore.DB                 // nil when storage.type != "postgres"
+	pgDB         *pgstore.DB // nil when storage.type != "postgres"
+
+	// store is the unified persistence layer. As of v0.2.x it is the
+	// single source of truth for cron jobs (UI handlers, agent tools
+	// and the scheduler all read/write through here). Other subsystems
+	// — chat tasks, agent sessions, memory — are gradually moving to
+	// the same store; until that's complete several legacy files in
+	// ~/.pawnix still exist alongside it.
+	store store.Store
 }
 
 // New creates a new Gateway with multi-agent support.
@@ -147,20 +156,69 @@ func New(cfg *config.Config) (*Gateway, error) {
 		heartbeats = append(heartbeats, hb)
 	}
 
-	// Set up cron scheduler
-	var cronJobs []cron.Job
-	for _, cj := range cfg.CronJobs {
-		cronJobs = append(cronJobs, cron.Job{
-			Name:     cj.Name,
-			Type:     cron.JobType(cj.Type),
-			Schedule: cj.Schedule,
-			AgentID:  cj.AgentID,
-			Channel:  cj.Channel,
-			ChatID:   cj.ChatID,
-			Message:  cj.Message,
-		})
+	// Open the unified store. We open this BEFORE the cron scheduler so
+	// the scheduler can be wired to the store-backed polling path that
+	// the UI and agent tools also write through. On any failure we fall
+	// back to a no-op (in-memory only) configuration: the in-memory job
+	// list from cfg.CronJobs still works, just without UI <→ agent
+	// visibility.
+	homeDir, _ := config.HomeDir()
+	unifiedStore, storeErr := store.New(&store.StorageConfig{
+		Type: store.StorageType(cfg.Storage.Type),
+		DSN:  cfg.Storage.DSN,
+	}, homeDir)
+	if storeErr != nil {
+		slog.Warn("unified store init failed; cron will be in-memory only",
+			"error", storeErr)
+		unifiedStore = nil
 	}
-	scheduler := cron.NewScheduler(cronJobs, mb)
+
+	// Ensure the cron_jobs table exists on database backends. The
+	// FileStore creates ~/.pawnix/cron_jobs.json lazily on first
+	// SaveCronJob so it doesn't need an explicit migration call.
+	// We deliberately migrate just this one table rather than running
+	// the full legacy Migrate() set — the historical migrationSQL
+	// includes memory_logs (AUTOINCREMENT, SQLite-only) and other
+	// dialect-specific quirks that fail under Postgres.
+	if dbs, ok := unifiedStore.(*store.DBStore); ok {
+		if err := dbs.MigrateCronJobs(context.Background()); err != nil {
+			slog.Warn("cron_jobs migration failed; UI/agent cron will return errors",
+				"error", err)
+		} else {
+			slog.Info("cron_jobs table ready")
+		}
+	}
+
+	// One-time migration: anything declared under cfg.CronJobs in the
+	// JSON config gets imported into the store, then the JSON list is
+	// emptied and rewritten. This collapses the historical "two ledgers"
+	// design — UI used to read JSON, agent tool wrote DB, scheduler
+	// polled DB — into a single source of truth in `unifiedStore`.
+	//
+	// Idempotent: if the store already contains a job with the same
+	// (Name, AgentID, Schedule) signature, we skip rather than duplicate.
+	if unifiedStore != nil && len(cfg.CronJobs) > 0 {
+		migrated := migrateLegacyCronJobs(unifiedStore, cfg.CronJobs)
+		if migrated > 0 {
+			slog.Info("cron: migrated legacy JSON jobs into store",
+				"count", migrated, "total_in_config", len(cfg.CronJobs))
+		}
+		// Drop the legacy field so subsequent saves don't re-introduce
+		// the duplicate ledger. We persist this immediately so a crash
+		// before clean shutdown still leaves the config in a sane state.
+		cfg.CronJobs = nil
+		if err := persistConfigSnapshot(cfg); err != nil {
+			slog.Warn("cron: failed to clear legacy CronJobs from config",
+				"error", err)
+		}
+	}
+
+	// In-memory legacy path is now empty by design; scheduler will
+	// pull everything from the store via SetStore below.
+	scheduler := cron.NewScheduler(nil, mb)
+	if unifiedStore != nil {
+		scheduler.SetStore(&schedulerStoreAdapter{st: unifiedStore})
+	}
 
 	// Register web search tool for all agents if configured
 	if cfg.WebSearch.APIKey != "" {
@@ -234,6 +292,19 @@ func New(cfg *config.Config) (*Gateway, error) {
 		webhookSrv:   webhookSrv,
 		pluginMgr:    pluginMgr,
 		pgDB:         pgDB,
+		store:        unifiedStore,
+	}
+
+	// Hand the unified store to every agent so their tool registries
+	// can register the cron-management toolset (create_cron_job,
+	// list_cron_jobs, delete_cron_job). Without this the agent has no
+	// in-band way to schedule a task and falls back to writing shell
+	// scripts + crontab via the exec tool — which is invisible to the
+	// platform and a security footgun.
+	if unifiedStore != nil {
+		for _, ag := range agentMgr.All() {
+			ag.SetCronStore(unifiedStore)
+		}
 	}
 
 	tq := taskqueue.NewQueue(maxConcurrent, taskTimeout, func(ctx context.Context, task *taskqueue.Task) (string, error) {

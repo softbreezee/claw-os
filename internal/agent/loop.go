@@ -166,6 +166,29 @@ func NewAgentWithFullCfg(rc config.ResolvedAgent, prov provider.Provider, mb *bu
 	return ag
 }
 
+// SetCronStore wires the unified Store into this agent's tool registry
+// and registers the cron-management toolset (create_cron_job,
+// list_cron_jobs, delete_cron_job).
+//
+// Why this isn't done in NewAgent: the store is owned by the gateway,
+// not the agent — keeping the construction order "agent first, store
+// later" lets us share one store across all agents and avoids forcing
+// every test/CLI helper that builds an Agent to also construct a
+// store.
+//
+// The tools deliberately default channel="" so the cron scheduler's
+// dispatch path treats them as in-process web chat triggers (see
+// internal/cron/scheduler.processDueJobs). When the agent wants the
+// reminder to land in a specific IM thread it can pass the channel
+// explicitly via the tool args (the LLM-facing schema is unchanged
+// from the original draft of this tool).
+func (a *Agent) SetCronStore(st store.Store) {
+	if a.registry == nil || st == nil {
+		return
+	}
+	tools.RegisterCronTools(a.registry, st, store.DefaultTenantID, a.name, "", "")
+}
+
 // NewAgentWithSkillsCfg creates a new Agent with global skills config for env injection.
 func NewAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider.Provider, mb *bus.MessageBus, homeDir string, globalSkillsCfg config.SkillsCfg) *Agent {
 	memory := NewMemory(rc.Workspace)

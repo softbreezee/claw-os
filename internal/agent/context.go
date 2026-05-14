@@ -158,6 +158,32 @@ You have the ability to update workspace files to maintain knowledge over time:
 Use the write_file tool to update these files when appropriate. Keep entries concise and useful.`,
 	})
 
+	// 8. Scheduled tasks — hard rule against the "shell crontab" footgun.
+	//    Without this guidance kimi-class models will happily reach for
+	//    `exec` to run `crontab -e` and write a shell script that calls
+	//    back into the agent over HTTP. That works in isolation but is
+	//    invisible to the Pawnix UI, doesn't survive uninstall, and
+	//    makes the system unauditable. The create_cron_job tool gives
+	//    the same capability with a single source of truth.
+	sections = append(sections, SystemPromptSection{
+		Name: "Scheduled Tasks",
+		Content: `# Scheduled Tasks
+When the user asks you to schedule a recurring or future task (cron, "every morning", "in 30 minutes", "next Monday at 9am"), you MUST use the create_cron_job tool.
+
+DO NOT:
+- Call the exec tool with crontab, launchctl, schtasks, or systemctl
+- Write a shell script and register it with the system scheduler
+- Tell the user to run "crontab -e" themselves
+
+Jobs created via create_cron_job:
+- Appear in the Pawnix dashboard under Cron Jobs (visible, editable, deletable)
+- Persist across restarts in the unified store
+- Re-trigger this same agent with the original prompt as the message
+- Are reported back to the user with their job ID for later reference
+
+Use list_cron_jobs to show what's scheduled and delete_cron_job to remove jobs by ID.`,
+	})
+
 	return sections
 }
 

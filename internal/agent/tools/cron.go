@@ -15,6 +15,12 @@ type createCronJobArgs struct {
 	Schedule string `json:"schedule"`
 	Message  string `json:"message"`
 	Type     string `json:"type"`
+	// Channel optionally targets a specific delivery channel
+	// ("telegram", "slack", …). When blank, the scheduler treats the
+	// trigger as an in-process web-chat reminder routed to the agent
+	// directly. Most LLM-initiated cron jobs leave this blank.
+	Channel string `json:"channel"`
+	ChatID  string `json:"chatId"`
 }
 
 type deleteCronJobArgs struct {
@@ -24,25 +30,27 @@ type deleteCronJobArgs struct {
 // RegisterCronTools registers cron job management tools.
 func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, chatID string) {
 	r.Register("create_cron_job",
-		"Create a scheduled task. The task will run at the specified schedule and send the message to the current channel.",
+		"Create a scheduled task that fires the given prompt back at this agent on a schedule. "+
+			"Prefer this over writing shell scripts to the system crontab — jobs created here "+
+			"are visible in the Pawnix UI's Cron Jobs page and persist across restarts.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"name": map[string]interface{}{
 					"type":        "string",
-					"description": "Task name",
+					"description": "Short human-readable task name (shown in the UI). Example: 'morning-summary'.",
 				},
 				"schedule": map[string]interface{}{
 					"type":        "string",
-					"description": "Cron expression like '0 9 * * *', interval like 'every 30m', or one-time ISO datetime",
+					"description": "Schedule string, format depends on `type`: cron expression like '0 9 * * *' (type=cron), Go duration like '30m'/'2h' (type=interval), HH:MM 24h (type=exact), or RFC3339 datetime (type=once).",
 				},
 				"message": map[string]interface{}{
 					"type":        "string",
-					"description": "The prompt/message to send to the agent when triggered",
+					"description": "The prompt that will be re-sent to this agent when the schedule fires.",
 				},
 				"type": map[string]interface{}{
 					"type":        "string",
-					"description": "Schedule type: 'cron' (default), 'interval', 'once'",
+					"description": "Schedule type. One of: 'cron' (default), 'interval', 'exact', 'once'.",
 				},
 			},
 			"required": []string{"name", "schedule", "message"},
@@ -75,7 +83,7 @@ func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, 
 	)
 }
 
-func makeCreateCronJob(st store.Store, tenantID, agentID, channel, chatID string) ToolFunc {
+func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaultChatID string) ToolFunc {
 	return func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 		var args createCronJobArgs
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
@@ -89,8 +97,26 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, channel, chatID string
 			jobType = "cron"
 		}
 
+		// Per-call channel override falls through to the values bound
+		// when the tool was registered. This lets a Telegram-bound
+		// agent default to telegram delivery, while a web-chat agent
+		// gets channel="" (in-process web reminder).
+		channel := args.Channel
+		if channel == "" {
+			channel = defaultChannel
+		}
+		chatID := args.ChatID
+		if chatID == "" {
+			chatID = defaultChatID
+		}
+
 		id := generateUUID()
 		now := time.Now()
+		// NextRun=now means "fire on the scheduler's next poll cycle";
+		// after first fire the scheduler computes the proper next
+		// tick from the schedule. This means newly-created jobs may
+		// fire up to ~1 minute late, which we accept in exchange for
+		// not duplicating cron-expression parsing inside the tool.
 		job := &store.CronJobRecord{
 			ID:        id,
 			TenantID:  tenantID,
@@ -101,7 +127,7 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, channel, chatID string
 			Message:   args.Message,
 			Channel:   channel,
 			ChatID:    chatID,
-			Timezone:  "UTC",
+			Timezone:  "Local",
 			Enabled:   true,
 			NextRun:   &now,
 			CreatedAt: now,
@@ -111,7 +137,7 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, channel, chatID string
 			return "", fmt.Errorf("save cron job: %w", err)
 		}
 
-		return fmt.Sprintf("Cron job created successfully.\nID: %s\nName: %s\nSchedule: %s\nType: %s", id, args.Name, args.Schedule, jobType), nil
+		return fmt.Sprintf("Cron job created successfully.\nID: %s\nName: %s\nSchedule: %s\nType: %s\nIt will appear in the Pawnix UI under Cron Jobs and start firing on the next poll cycle (within 60s).", id, args.Name, args.Schedule, jobType), nil
 	}
 }
 

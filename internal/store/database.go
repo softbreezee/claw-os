@@ -76,6 +76,47 @@ func (d *DBStore) MigrateChatTasks(ctx context.Context) error {
 	return nil
 }
 
+// MigrateCronJobs creates only the cron_jobs table + its index. Same
+// rationale as MigrateChatTasks: callers that want a single subsystem
+// shouldn't have to run the full legacy migration set.
+//
+// As of v0.2.x the gateway calls this on every startup so the unified
+// cron-jobs ledger is always available regardless of how Storage.Type
+// or Storage.AutoMigrate is configured.
+func (d *DBStore) MigrateCronJobs(ctx context.Context) error {
+	for _, stmt := range d.cronJobsMigrationSQL() {
+		if _, err := d.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrate cron_jobs: %w\nSQL: %s", err, stmt)
+		}
+	}
+	return nil
+}
+
+func (d *DBStore) cronJobsMigrationSQL() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS cron_jobs (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL DEFAULT 'cron',
+			schedule TEXT NOT NULL,
+			message TEXT NOT NULL,
+			channel TEXT NOT NULL,
+			chat_id TEXT NOT NULL,
+			account_id TEXT NOT NULL DEFAULT '',
+			timezone TEXT NOT NULL DEFAULT 'UTC',
+			enabled BOOLEAN NOT NULL DEFAULT true,
+			last_run TIMESTAMP,
+			next_run TIMESTAMP,
+			locked_by TEXT,
+			locked_at TIMESTAMP,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cron_jobs_schedule ON cron_jobs (tenant_id, enabled, next_run)`,
+	}
+}
+
 func (d *DBStore) chatTasksMigrationSQL() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS chat_tasks (

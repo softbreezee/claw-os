@@ -116,28 +116,22 @@ func runGateway(port int) error {
 	//                                 →  agent.HandleWebChatStream
 	//                                 →  events streamed via eventbus to
 	//                                    GET /api/chat/tasks/:id/events
-	// We construct a separate store.Store here (the gateway uses its own
-	// pg backend for sessions, but doesn't expose a generic Store). For
-	// the file backend this is essentially zero-cost; for SQLite/Postgres
-	// it opens a second connection pool, which is fine.
-	homeDir, _ := config.HomeDir()
-	// Open the store WITHOUT full AutoMigrate – the legacy migration
-	// set has dialect-specific issues (e.g. memory_logs AUTOINCREMENT
-	// only works on SQLite). For the chat_tasks table we need, we run
-	// a targeted migration below.
-	chatTaskStore, storeErr := store.New(&store.StorageConfig{
-		Type: store.StorageType(cfg.Storage.Type),
-		DSN:  cfg.Storage.DSN,
-	}, homeDir)
-	if storeErr != nil {
-		slog.Warn("chat task store init failed; async chat tasks disabled", "err", storeErr)
+	//
+	// We deliberately reuse the gateway's unified store rather than
+	// opening a second handle. Pre-v0.2.x there were two parallel
+	// store handles for cron + chat_tasks, which caused subtle write
+	// races on the file backend (two writers to ~/.pawnix/cron_jobs.json)
+	// and doubled connection pools on PG/SQLite. One store, one source
+	// of truth.
+	chatTaskStore := gw.Store()
+	if chatTaskStore == nil {
+		slog.Warn("chat task store unavailable (gateway store init failed); async chat tasks disabled")
 	} else {
-		// Run only chat_tasks DDL if we're on a database backend.
-		// The file backend doesn't need any schema setup.
+		// Targeted DDL for chat_tasks on database backends. The file
+		// backend doesn't need any schema setup.
 		if dbs, ok := chatTaskStore.(*store.DBStore); ok {
 			if mErr := dbs.MigrateChatTasks(context.Background()); mErr != nil {
 				slog.Warn("chat_tasks migration failed; async chat tasks disabled", "err", mErr)
-				chatTaskStore.Close()
 				chatTaskStore = nil
 			}
 		}
@@ -149,6 +143,13 @@ func runGateway(port int) error {
 			webSrv.SetChatTaskRunner(runner, evtBus, chatTaskStore, store.DefaultTenantID)
 			slog.Info("chat task subsystem ready")
 		}
+	}
+
+	// Hand the same unified store to the setup HTTP server so the
+	// Cron Jobs page reads/writes the same ledger as the agent tools
+	// and scheduler.
+	if cs := gw.Store(); cs != nil {
+		webSrv.SetCronStore(cs, store.DefaultTenantID)
 	}
 
 	// Set up OpenAI-compatible API and WebSocket gateway

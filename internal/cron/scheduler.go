@@ -163,20 +163,107 @@ func (s *Scheduler) processDueJobs(ctx context.Context) {
 			text = fmt.Sprintf("[Cron Job: %s] This is a scheduled task trigger.", j.Name)
 		}
 
+		// A blank channel means "deliver via the in-process web chat path"
+		// — we tag it as "web" so the gateway's bus subscriber can route
+		// it to the agent.HandleWebChat sink. Cron jobs created from the
+		// chat UI flow through this branch.
+		ch := j.Channel
+		if ch == "" {
+			ch = "web"
+		}
 		s.bus.Inbound <- bus.InboundMessage{
-			Channel:  j.Channel,
+			Channel:  ch,
 			ChatID:   j.ChatID,
 			UserID:   "cron",
 			Text:     text,
 			PeerKind: "dm",
 		}
 
-		// Calculate next run (simple: add 60s for now; real implementation would parse schedule)
-		nextRun := now.Add(60 * time.Second)
+		// Compute the actual next fire time from the job's schedule. The
+		// previous "now + 60s" placeholder caused jobs to refire every
+		// minute regardless of cron expression — fine for a smoke test,
+		// catastrophic in real use.
+		nextRun := computeNextRun(j.Type, j.Schedule, now)
 		if err := s.store.UpdateCronJobRun(ctx, j.ID, now, nextRun); err != nil {
 			slog.Error("failed to update cron job run", "id", j.ID, "error", err)
 		}
 	}
+}
+
+// computeNextRun returns the next time a job of the given type+schedule
+// should fire after `from`. On any parse error it falls back to one hour
+// out, which is a safe-enough rate-limit to avoid hot-spinning if a user
+// somehow stored a malformed schedule.
+//
+// Supported types (matches cron.JobType + a few synonyms used by the
+// agent tool's create_cron_job for ergonomic LLM input):
+//   - "interval" / "duration"  — go duration like "5m", "1h"
+//   - "exact" / "daily"        — HH:MM, fires once per day at that wall-clock time
+//   - "cron"                   — five-field cron expression (* and */N supported)
+//   - "once"                   — RFC3339 datetime; after firing nextRun is far future (year 9999)
+func computeNextRun(jobType, schedule string, from time.Time) time.Time {
+	const fallback = time.Hour
+	jobType = strings.ToLower(strings.TrimSpace(jobType))
+	schedule = strings.TrimSpace(schedule)
+
+	switch jobType {
+	case "interval", "duration":
+		if d, err := time.ParseDuration(schedule); err == nil && d > 0 {
+			return from.Add(d)
+		}
+	case "exact", "daily":
+		parts := strings.Split(schedule, ":")
+		if len(parts) == 2 {
+			hour, err1 := strconv.Atoi(parts[0])
+			minute, err2 := strconv.Atoi(parts[1])
+			if err1 == nil && err2 == nil {
+				next := time.Date(from.Year(), from.Month(), from.Day(), hour, minute, 0, 0, from.Location())
+				if !next.After(from) {
+					next = next.Add(24 * time.Hour)
+				}
+				return next
+			}
+		}
+	case "once":
+		if t, err := time.Parse(time.RFC3339, schedule); err == nil {
+			if t.After(from) {
+				return t
+			}
+			// Already fired-or-past — push way out so it never re-fires.
+			return time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+		}
+	case "cron", "":
+		if next := nextCronTick(schedule, from); !next.IsZero() {
+			return next
+		}
+	}
+
+	slog.Warn("cron: cannot parse schedule, falling back to +1h",
+		"type", jobType, "schedule", schedule)
+	return from.Add(fallback)
+}
+
+// nextCronTick walks forward minute-by-minute from `from+1m` looking for
+// the next time that matches the 5-field cron expression. Capped at one
+// year so a hopelessly impossible expression like "0 0 30 2 *" returns
+// the zero time and the caller can fall back. Inefficient but trivially
+// correct, which matches the rest of this scheduler's "small and obvious"
+// design (we already do per-minute polling for the in-memory cron path).
+func nextCronTick(expr string, from time.Time) time.Time {
+	fields := strings.Fields(expr)
+	if len(fields) != 5 {
+		return time.Time{}
+	}
+	// Round up to the next whole minute so we don't return `from` itself.
+	t := from.Truncate(time.Minute).Add(time.Minute)
+	limit := from.Add(365 * 24 * time.Hour)
+	for !t.After(limit) {
+		if cronMatch(fields, t) {
+			return t
+		}
+		t = t.Add(time.Minute)
+	}
+	return time.Time{}
 }
 
 func (s *Scheduler) runJob(ctx context.Context, job Job) {

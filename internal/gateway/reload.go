@@ -11,7 +11,6 @@ import (
 	"github.com/softbreezee/claw-os/internal/bus"
 	"github.com/softbreezee/claw-os/internal/channels"
 	"github.com/softbreezee/claw-os/internal/config"
-	"github.com/softbreezee/claw-os/internal/cron"
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -189,22 +188,27 @@ func (g *Gateway) reloadAgents(newCfg *config.Config) {
 	g.agents.Rewire()
 }
 
-// reloadCron updates the cron scheduler with new jobs.
+// reloadCron rewires the in-memory scheduler when the config changes.
+//
+// Post-v0.2.x cron jobs live in the store, not in cfg.CronJobs, so the
+// scheduler picks up adds/removes via its 60-second pollStore loop
+// regardless of config saves. We still honour any legacy CronJobs that
+// somehow appeared in a hand-edited pawnix.json — re-importing them
+// into the store keeps the behaviour-preserving migration path alive.
 func (g *Gateway) reloadCron(newCfg *config.Config) {
-	var cronJobs []cron.Job
-	for _, cj := range newCfg.CronJobs {
-		cronJobs = append(cronJobs, cron.Job{
-			Name:     cj.Name,
-			Type:     cron.JobType(cj.Type),
-			Schedule: cj.Schedule,
-			AgentID:  cj.AgentID,
-			Channel:  cj.Channel,
-			ChatID:   cj.ChatID,
-			Message:  cj.Message,
-		})
+	if g.store != nil && len(newCfg.CronJobs) > 0 {
+		migrated := migrateLegacyCronJobs(g.store, newCfg.CronJobs)
+		if migrated > 0 {
+			slog.Info("hot-reload: imported legacy cron jobs from config",
+				"count", migrated)
+		}
+		// Drop the legacy field so the next save doesn't reintroduce them.
+		newCfg.CronJobs = nil
 	}
-	g.scheduler.UpdateJobs(cronJobs)
-	slog.Info("hot-reload: cron jobs updated", "count", len(cronJobs))
+	// In-memory job list is intentionally empty; we keep the call so
+	// the scheduler clears any stale goroutines from before the migration.
+	g.scheduler.UpdateJobs(nil)
+	slog.Info("hot-reload: cron jobs reloaded (store-backed)")
 }
 
 // reloadTeams updates team config and group context.

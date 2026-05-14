@@ -92,6 +92,14 @@ type Server struct {
 	taskStore  store.Store
 	tenantID   string
 
+	// Cron job store. As of v0.2.x the Cron Jobs page reads and writes
+	// directly to this store instead of the legacy cfg.CronJobs JSON
+	// field, so UI-created and agent-created jobs share one ledger.
+	// May be nil during setup wizard or if the gateway store init
+	// failed; handlers fall back to the empty list rather than 5xx.
+	cronStore    store.Store
+	cronTenantID string
+
 	// Upload store for chat attachments. Lazy-initialised in
 	// uploadStore() rather than wired through every constructor —
 	// keeps the change to existing call sites minimal.
@@ -140,6 +148,18 @@ func (s *Server) SetChatTaskRunner(r *taskrunner.Runner, bus eventbus.Bus, st st
 // SetAPIServer sets the OpenAI-compatible API server for /v1/* and /ws routes.
 func (s *Server) SetAPIServer(apiSrv *api.Server) {
 	s.apiServer = apiSrv
+}
+
+// SetCronStore wires the unified cron-jobs store. After this call the
+// /api/cron handlers persist to the store rather than to cfg.CronJobs
+// in pawnix.json. Pass nil to disable (handlers will return empty
+// lists for GET and 503 for mutations).
+func (s *Server) SetCronStore(st store.Store, tenantID string) {
+	s.cronStore = st
+	if tenantID == "" {
+		tenantID = store.DefaultTenantID
+	}
+	s.cronTenantID = tenantID
 }
 
 // Run starts the HTTP server and blocks until the context is canceled
@@ -202,6 +222,10 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/cron", s.handleCreateCronJob)
 	mux.HandleFunc("PUT /api/cron/{id}", s.handleUpdateCronJob)
 	mux.HandleFunc("DELETE /api/cron/{id}", s.handleDeleteCronJob)
+	// Manual trigger — sets NextRun = now so the scheduler picks it
+	// up on the next poll cycle (within 60s). Lets the user smoke-
+	// test a freshly-created job without waiting for the schedule.
+	mux.HandleFunc("POST /api/cron/{id}/run", s.handleRunCronJobNow)
 
 	// Apps (quick-launch external web tools)
 	mux.HandleFunc("GET /api/apps", s.handleListApps)

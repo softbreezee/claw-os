@@ -95,8 +95,9 @@ export interface CronJobInfo {
   chatId: string;
   message: string;
   enabled: boolean;
-  lastRun?: string;
-  nextRun?: string;
+  lastRun?: string;   // RFC3339; absent when never fired
+  nextRun?: string;   // RFC3339; absent for malformed schedules
+  createdAt?: string; // RFC3339; from store, used to display "added 2h ago"
 }
 
 export interface ModelCost {
@@ -643,6 +644,16 @@ export async function updateCronJob(id: string, job: Partial<CronJobInfo>) {
 export async function deleteCronJob(id: string) {
   const res = await fetch(`/api/cron/${id}`, {
     method: "DELETE",
+  });
+  return res.json();
+}
+
+// runCronJobNow nudges the scheduler to fire the job on its next poll
+// cycle (within ~60s). Useful for smoke-testing a freshly created job
+// without waiting for its real schedule.
+export async function runCronJobNow(id: string) {
+  const res = await fetch(`/api/cron/${id}/run`, {
+    method: "POST",
   });
   return res.json();
 }

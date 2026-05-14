@@ -41,12 +41,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Clock, Plus, Trash2 } from "lucide-react";
+import { Clock, Play, Plus, Trash2 } from "lucide-react";
 import {
   getCronJobs,
   createCronJob,
   updateCronJob,
   deleteCronJob,
+  runCronJobNow,
   getAgents,
   type CronJobInfo,
   type AgentDetail,
@@ -117,6 +118,41 @@ export default function CronPage() {
     fetchData();
   };
 
+  const handleRunNow = async (job: CronJobInfo) => {
+    await runCronJobNow(job.id);
+    // Bump the next-run column visually right away — the actual fire
+    // happens within ~60s when the scheduler's poll loop ticks.
+    fetchData();
+  };
+
+  // formatRunTime renders the RFC3339 timestamps from the API as
+  // human-readable wall clock with a relative hint. Bare "—" when
+  // we have nothing yet (job created but never fired).
+  const formatRunTime = (iso?: string) => {
+    if (!iso) return "—";
+    try {
+      const d = new Date(iso);
+      const now = Date.now();
+      const diffMs = d.getTime() - now;
+      const absMin = Math.abs(Math.round(diffMs / 60000));
+      let rel: string;
+      if (absMin < 1) {
+        rel = "just now";
+      } else if (absMin < 60) {
+        rel = diffMs >= 0 ? `in ${absMin}m` : `${absMin}m ago`;
+      } else if (absMin < 60 * 24) {
+        const h = Math.round(absMin / 60);
+        rel = diffMs >= 0 ? `in ${h}h` : `${h}h ago`;
+      } else {
+        const d2 = Math.round(absMin / (60 * 24));
+        rel = diffMs >= 0 ? `in ${d2}d` : `${d2}d ago`;
+      }
+      return `${d.toLocaleString()} (${rel})`;
+    } catch {
+      return iso;
+    }
+  };
+
   const typeColor = (type: string) => {
     const colors: Record<string, string> = {
       cron: "bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20",
@@ -172,6 +208,7 @@ export default function CronPage() {
                 <TableHead>Type</TableHead>
                 <TableHead>Agent</TableHead>
                 <TableHead>Last Run</TableHead>
+                <TableHead>Next Run</TableHead>
                 <TableHead>Enabled</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -180,7 +217,14 @@ export default function CronPage() {
               {jobs.map((job) => (
                 <TableRow key={job.id} className="hover:bg-muted/50 transition-colors">
                   <TableCell>
-                    <span className="font-medium">{job.name}</span>
+                    <div className="flex flex-col">
+                      <span className="font-medium">{job.name}</span>
+                      {job.message && (
+                        <span className="text-xs text-muted-foreground line-clamp-1 max-w-[260px]">
+                          {job.message}
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>
                     <code className="rounded bg-muted px-2 py-1 text-xs font-mono">
@@ -197,7 +241,12 @@ export default function CronPage() {
                   </TableCell>
                   <TableCell>
                     <span className="text-xs text-muted-foreground">
-                      {job.lastRun || "Never"}
+                      {formatRunTime(job.lastRun)}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-xs text-muted-foreground">
+                      {formatRunTime(job.nextRun)}
                     </span>
                   </TableCell>
                   <TableCell>
@@ -207,14 +256,26 @@ export default function CronPage() {
                     />
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                      onClick={() => setDeleteId(job.id)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-primary"
+                        title="Run now (fires on next scheduler poll, within 60s)"
+                        onClick={() => handleRunNow(job)}
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        title="Delete job"
+                        onClick={() => setDeleteId(job.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
