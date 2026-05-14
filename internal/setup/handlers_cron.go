@@ -29,6 +29,7 @@ func jobToJSON(j store.CronJobRecord) map[string]any {
 		"schedule":  j.Schedule,
 		"agentId":   j.AgentID,
 		"channel":   j.Channel,
+		"accountId": j.AccountID,
 		"chatId":    j.ChatID,
 		"message":   j.Message,
 		"enabled":   j.Enabled,
@@ -68,14 +69,15 @@ func (s *Server) handleCreateCronJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name     string `json:"name"`
-		Type     string `json:"type"`
-		Schedule string `json:"schedule"`
-		AgentID  string `json:"agentId"`
-		Channel  string `json:"channel"`
-		ChatID   string `json:"chatId"`
-		Message  string `json:"message"`
-		Enabled  *bool  `json:"enabled,omitempty"`
+		Name      string `json:"name"`
+		Type      string `json:"type"`
+		Schedule  string `json:"schedule"`
+		AgentID   string `json:"agentId"`
+		Channel   string `json:"channel"`
+		AccountID string `json:"accountId"`
+		ChatID    string `json:"chatId"`
+		Message   string `json:"message"`
+		Enabled   *bool  `json:"enabled,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest,
@@ -104,6 +106,7 @@ func (s *Server) handleCreateCronJob(w http.ResponseWriter, r *http.Request) {
 		Schedule:  req.Schedule,
 		Message:   req.Message,
 		Channel:   req.Channel,
+		AccountID: req.AccountID,
 		ChatID:    req.ChatID,
 		Timezone:  "Local",
 		Enabled:   enabled,

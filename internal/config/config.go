@@ -264,12 +264,23 @@ type ChannelConfig struct {
 	Enabled  bool                     `json:"enabled"`
 	BotToken string                   `json:"botToken,omitempty"`
 	AppToken string                   `json:"appToken,omitempty"` // for Slack Socket Mode
+	// MyChatID is the channel-level fallback "send notifications to me
+	// here" address. Used when the channel has no accounts or when an
+	// account doesn't override it. The exact format is per-channel —
+	// telegram=numeric chat_id, slack=Uxxx user id, email=address,
+	// wechat=openid, etc. UI labels accordingly.
+	MyChatID string                   `json:"myChatId,omitempty"`
 	Accounts map[string]AccountConfig `json:"accounts,omitempty"`
 }
 
 // AccountConfig holds account-specific overrides within a channel.
 type AccountConfig struct {
 	BotToken string `json:"botToken,omitempty"`
+	// MyChatID overrides ChannelConfig.MyChatID for this specific
+	// account. Only set when the user wants different bots in the
+	// same channel to deliver notifications to different chats
+	// (rare for personal-OS, common for multi-tenant deployments).
+	MyChatID string `json:"myChatId,omitempty"`
 }
 
 // Binding maps a match pattern to an agent.

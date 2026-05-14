@@ -170,19 +170,13 @@ func NewAgentWithFullCfg(rc config.ResolvedAgent, prov provider.Provider, mb *bu
 // and registers the cron-management toolset (create_cron_job,
 // list_cron_jobs, delete_cron_job).
 //
-// Why this isn't done in NewAgent: the store is owned by the gateway,
-// not the agent — keeping the construction order "agent first, store
-// later" lets us share one store across all agents and avoids forcing
-// every test/CLI helper that builds an Agent to also construct a
-// store.
-//
-// The tools deliberately default channel="" so the cron scheduler's
-// dispatch path treats them as in-process web chat triggers (see
-// internal/cron/scheduler.processDueJobs). When the agent wants the
-// reminder to land in a specific IM thread it can pass the channel
-// explicitly via the tool args (the LLM-facing schema is unchanged
-// from the original draft of this tool).
-func (a *Agent) SetCronStore(st store.Store) {
+// recipientResolver is optional. When non-nil, create_cron_job can
+// auto-fill the chatID for cross-channel jobs (e.g. user is in web
+// chat saying "remind me on telegram") by looking up the user's
+// MyChatID for the target channel — saves the LLM from needing to
+// know addresses. Pass nil to disable that fallback (the LLM must
+// then provide an explicit chatID for non-web channels).
+func (a *Agent) SetCronStore(st store.Store, recipientResolver tools.RecipientResolver) {
 	if a.registry == nil || st == nil {
 		return
 	}
@@ -195,7 +189,26 @@ func (a *Agent) SetCronStore(st store.Store) {
 		o := ChatOriginFromContext(ctx)
 		return o.Channel, o.AccountID, o.ChatID
 	}
-	tools.RegisterCronTools(a.registry, st, store.DefaultTenantID, a.name, "", "", originGetter)
+	tools.RegisterCronTools(a.registry, st, store.DefaultTenantID, a.name, "", "", originGetter, recipientResolver)
+}
+
+// SetNotifyDeps wires the recipient resolver + outbound + notification
+// writer for the notify(text, channel?) tool. The agent uses notify
+// to push unsolicited messages to the user — cron jobs build on this
+// indirectly via the scheduler, but other tools (watchers, alerts,
+// finished long-running tasks) can call it directly.
+//
+// All three deps are required together; pass nil to no-op (e.g. tests
+// that don't exercise the inbox path).
+func (a *Agent) SetNotifyDeps(
+	resolve tools.RecipientResolver,
+	send tools.OutboundSender,
+	writeNotif tools.NotificationWriter,
+) {
+	if a.registry == nil {
+		return
+	}
+	tools.RegisterNotifyTool(a.registry, a.name, resolve, send, writeNotif)
 }
 
 // NewAgentWithSkillsCfg creates a new Agent with global skills config for env injection.

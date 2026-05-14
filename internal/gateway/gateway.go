@@ -301,16 +301,29 @@ func New(cfg *config.Config) (*Gateway, error) {
 		store:        unifiedStore,
 	}
 
-	// Hand the unified store to every agent so their tool registries
-	// can register the cron-management toolset (create_cron_job,
-	// list_cron_jobs, delete_cron_job). Without this the agent has no
-	// in-band way to schedule a task and falls back to writing shell
-	// scripts + crontab via the exec tool — which is invisible to the
-	// platform and a security footgun.
+	// Recipient resolver: looks up the user's "send to me" address
+	// for any (channel, accountID) by walking cfg.Channels. Shared
+	// by the cron tool (chatID auto-fill for cross-channel jobs)
+	// and the notify tool (any-agent push to the user).
+	resolver := makeRecipientResolver(cfg)
+	sender := func(out bus.OutboundMessage) {
+		mb.Outbound <- out
+	}
+	notifWriter := makeNotificationWriter(unifiedStore)
+
+	// Hand the unified store + resolver to every agent so their tool
+	// registries can register cron management AND the notify tool.
+	// Without this the agent has no in-band way to schedule a task
+	// (falls back to writing shell scripts + crontab via exec —
+	// invisible to the platform and a security footgun) or to push
+	// to the user.
 	if unifiedStore != nil {
 		for _, ag := range agentMgr.All() {
-			ag.SetCronStore(unifiedStore)
+			ag.SetCronStore(unifiedStore, resolver)
 		}
+	}
+	for _, ag := range agentMgr.All() {
+		ag.SetNotifyDeps(resolver, sender, notifWriter)
 	}
 
 	tq := taskqueue.NewQueue(maxConcurrent, taskTimeout, func(ctx context.Context, task *taskqueue.Task) (string, error) {

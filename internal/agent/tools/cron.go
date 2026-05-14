@@ -42,7 +42,15 @@ type deleteCronJobArgs struct {
 // default to delivering back through Telegram, while web-chat ones
 // default to the in-app Inbox. Per-call args.Channel still wins on
 // top of both.
-func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, chatID string, originGetter ChatOriginGetter) {
+//
+// recipientResolver is optional. When set, it lets create_cron_job
+// auto-fill the chatID for cross-channel jobs: "in the web chat, ask
+// the agent to send the cron reminder to telegram" works without the
+// LLM having to know the user's telegram chat ID — the resolver pulls
+// it from cfg.Channels[telegram].MyChatID. Pass nil if no resolver
+// (cron tool will then require an explicit chatID arg for non-web
+// channels).
+func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, chatID string, originGetter ChatOriginGetter, recipientResolver RecipientResolver) {
 	r.Register("create_cron_job",
 		"Create a scheduled task that fires the given prompt back at this agent on a schedule. "+
 			"Prefer this over writing shell scripts to the system crontab — jobs created here "+
@@ -69,7 +77,7 @@ func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, 
 			},
 			"required": []string{"name", "schedule", "message"},
 		},
-		makeCreateCronJob(st, tenantID, agentID, channel, chatID, originGetter),
+		makeCreateCronJob(st, tenantID, agentID, channel, chatID, originGetter, recipientResolver),
 	)
 
 	r.Register("list_cron_jobs",
@@ -97,7 +105,7 @@ func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, 
 	)
 }
 
-func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaultChatID string, originGetter ChatOriginGetter) ToolFunc {
+func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaultChatID string, originGetter ChatOriginGetter, recipientResolver RecipientResolver) ToolFunc {
 	return func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 		var args createCronJobArgs
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
@@ -135,6 +143,19 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaul
 		}
 		if chatID == "" {
 			chatID = defaultChatID
+		}
+
+		// Cross-channel fallback: when the LLM said "send to telegram"
+		// from a web conversation, originGetter returns ChatID from
+		// the web session (useless for telegram delivery). Fall back
+		// to the user's "MyChatID" config for the target channel so
+		// cron-on-IM works without the LLM needing to know addresses.
+		// Skip for "" / "web" — those go to the Inbox (no chat ID needed).
+		if (chatID == "" || (channel != "" && channel != "web" && chatID == defaultChatID)) &&
+			channel != "" && channel != "web" && recipientResolver != nil {
+			if resolved, ok := recipientResolver(channel, accountID); ok {
+				chatID = resolved
+			}
 		}
 
 		id := generateUUID()

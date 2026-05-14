@@ -158,7 +158,25 @@ You have the ability to update workspace files to maintain knowledge over time:
 Use the write_file tool to update these files when appropriate. Keep entries concise and useful.`,
 	})
 
-	// 8. Scheduled tasks — hard rule against the "shell crontab" footgun.
+	// 8a. Push notifications — the OS-level "I want to ping the user
+	//     right now" primitive. notify(text, channel?) decides
+	//     between Inbox (default) and IM channels (telegram, slack,
+	//     ...) based on the channel argument. The recipient address
+	//     is auto-resolved from the user's channel config — the LLM
+	//     does NOT need to know any IDs.
+	sections = append(sections, SystemPromptSection{
+		Name: "Push Notifications",
+		Content: `# Push Notifications
+You can call notify(text, channel?, title?) at any time to push an unsolicited message to the user. Three patterns:
+
+1. Default (channel=''): writes to the in-app Inbox + browser toast. Use this for routine updates, status reports, "FYI" messages.
+2. Real channel (channel='telegram' / 'slack' / 'discord'): delivers via the configured IM bot. Use this for time-sensitive things the user shouldn't miss while away from the dashboard.
+3. The recipient address (chat ID, user ID, email, ...) is looked up automatically from the user's channel config — you do NOT need to ask the user for it. If the lookup fails the tool returns an error telling you to ask the user to set it under Channels.
+
+Heuristic: if it's information the user might want at-leisure, use Inbox. If it's actionable now or risk-of-missing, use the user's preferred IM channel.`,
+	})
+
+	// 8b. Scheduled tasks — hard rule against the "shell crontab" footgun.
 	//    Without this guidance kimi-class models will happily reach for
 	//    `exec` to run `crontab -e` and write a shell script that calls
 	//    back into the agent over HTTP. That works in isolation but is

@@ -30,6 +30,12 @@ export interface ChannelAccount {
   id: string;
   botToken: string;       // masked; submit unchanged to preserve
   agentId?: string;       // bound agent, derived from cfg.bindings
+  myChatId?: string;      // user's "send to me" address on this bot
+                          //   - telegram: numeric chat_id
+                          //   - slack:    Uxxx user id (DM target)
+                          //   - discord:  user id
+                          //   - email:    email address (future)
+                          //   - wechat:   openid (future)
   botUsername?: string;   // populated client-side after a successful test
 }
 
@@ -593,6 +599,7 @@ export interface ChannelUpdateBody {
     id: string;
     botToken: string;     // pass masked value to keep, or new value to update
     agentId?: string;
+    myChatId?: string;    // user's "send to me" address (telegram chat_id, etc)
   }>;
 }
 

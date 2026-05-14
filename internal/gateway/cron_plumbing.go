@@ -40,14 +40,15 @@ func (a *schedulerStoreAdapter) GetDueCronJobs(ctx context.Context, now time.Tim
 			continue
 		}
 		out = append(out, cron.StoreJob{
-			ID:       r.ID,
-			AgentID:  r.AgentID,
-			Name:     r.Name,
-			Type:     r.Type,
-			Schedule: r.Schedule,
-			Message:  r.Message,
-			Channel:  r.Channel,
-			ChatID:   r.ChatID,
+			ID:        r.ID,
+			AgentID:   r.AgentID,
+			Name:      r.Name,
+			Type:      r.Type,
+			Schedule:  r.Schedule,
+			Message:   r.Message,
+			Channel:   r.Channel,
+			AccountID: r.AccountID, // critical: lets chanMgr key the right bot
+			ChatID:    r.ChatID,
 		})
 	}
 	return out, nil

@@ -32,6 +32,10 @@ type channelAccountResponse struct {
 	ID       string `json:"id"`
 	BotToken string `json:"botToken"`
 	AgentID  string `json:"agentId,omitempty"`
+	// MyChatID is the user's "send to me" address on this bot —
+	// telegram chat_id, slack user ID, etc. Plain text on the wire
+	// (it's a contact identifier, not a secret like the bot token).
+	MyChatID string `json:"myChatId,omitempty"`
 }
 
 type channelDetailResponse struct {
@@ -77,6 +81,7 @@ type channelAccountInput struct {
 	ID       string `json:"id"`
 	BotToken string `json:"botToken"`
 	AgentID  string `json:"agentId"`
+	MyChatID string `json:"myChatId"`
 }
 
 func (s *Server) handleUpsertChannel(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +129,10 @@ func (s *Server) handleUpsertChannel(w http.ResponseWriter, r *http.Request) {
 			jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": fmt.Sprintf("bot token is required for account %q", id)})
 			return
 		}
-		mergedAccounts[id] = config.AccountConfig{BotToken: token}
+		mergedAccounts[id] = config.AccountConfig{
+			BotToken: token,
+			MyChatID: strings.TrimSpace(a.MyChatID),
+		}
 	}
 
 	// Channel-level botToken is only meaningful for backwards-compat /
@@ -303,10 +311,18 @@ func buildChannelDetail(chType string, ch config.ChannelConfig, bindings []confi
 		if token == "" {
 			token = ch.BotToken
 		}
+		// MyChatID falls back from account-level to channel-level so a
+		// user who configured it once at the channel level (single-bot
+		// setup) doesn't see "missing" in every account row.
+		myChatID := acct.MyChatID
+		if myChatID == "" {
+			myChatID = ch.MyChatID
+		}
 		resp.Accounts = append(resp.Accounts, channelAccountResponse{
 			ID:       id,
 			BotToken: maskToken(token),
 			AgentID:  agentForAccount(bindings, chType, id),
+			MyChatID: myChatID,
 		})
 	}
 	return resp

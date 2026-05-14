@@ -25,13 +25,14 @@ const (
 
 // Job defines a scheduled job.
 type Job struct {
-	Name     string  `json:"name"`
-	Type     JobType `json:"type"`
-	Schedule string  `json:"schedule"` // depends on type
-	AgentID  string  `json:"agentId"`
-	Channel  string  `json:"channel"`  // channel to send results back through
-	ChatID   string  `json:"chatId"`   // chat to send results to
-	Message  string  `json:"message"`  // message to send to the agent
+	Name      string  `json:"name"`
+	Type      JobType `json:"type"`
+	Schedule  string  `json:"schedule"`           // depends on type
+	AgentID   string  `json:"agentId"`
+	Channel   string  `json:"channel"`             // channel to send results back through
+	AccountID string  `json:"accountId,omitempty"` // optional bot account within the channel
+	ChatID    string  `json:"chatId"`              // chat to send results to
+	Message   string  `json:"message"`             // message to send to the agent
 }
 
 // CronConfig holds cron job configuration.
@@ -47,15 +48,23 @@ type StoreInterface interface {
 }
 
 // StoreJob mirrors store.CronJobRecord to avoid import cycle.
+//
+// AccountID is required for IM channels that register multiple bots
+// per channel type (e.g. two telegram bots, one personal one team).
+// The chanMgr keys outbound messages on "channel:accountID" — drop
+// AccountID and the cron-fired reply ends up as "telegram:" which
+// matches no registered handler and the message is silently dropped.
+// This was the root cause of "Telegram cron didn't deliver" until v0.3.x.
 type StoreJob struct {
-	ID       string
-	AgentID  string
-	Name     string
-	Type     string
-	Schedule string
-	Message  string
-	Channel  string
-	ChatID   string
+	ID        string
+	AgentID   string
+	Name      string
+	Type      string
+	Schedule  string
+	Message   string
+	Channel   string
+	AccountID string
+	ChatID    string
 }
 
 // Scheduler manages cron job execution.
@@ -172,13 +181,14 @@ func (s *Scheduler) processDueJobs(ctx context.Context) {
 			ch = "web"
 		}
 		s.bus.Inbound <- bus.InboundMessage{
-			Channel:  ch,
-			ChatID:   j.ChatID,
-			UserID:   "cron",
-			Text:     text,
-			PeerKind: "dm",
-			AgentID:  j.AgentID, // bypass binding match — cron knows its agent
-			Origin:   "cron",    // signals "deliver as Notification, not chat reply"
+			Channel:   ch,
+			AccountID: j.AccountID, // required so chanMgr can route to the right bot instance
+			ChatID:    j.ChatID,
+			UserID:    "cron",
+			Text:      text,
+			PeerKind:  "dm",
+			AgentID:   j.AgentID, // bypass binding match — cron knows its agent
+			Origin:    "cron",    // signals "deliver as Notification, not chat reply"
 		}
 
 		// Compute the actual next fire time from the job's schedule. The
@@ -405,13 +415,14 @@ func (s *Scheduler) fireJob(job Job) {
 		ch = "web"
 	}
 	s.bus.Inbound <- bus.InboundMessage{
-		Channel:  ch,
-		ChatID:   job.ChatID,
-		UserID:   "cron",
-		Text:     text,
-		PeerKind: "dm",
-		AgentID:  job.AgentID, // bypass binding match
-		Origin:   "cron",      // signals "deliver as Notification, not chat reply"
+		Channel:   ch,
+		AccountID: job.AccountID,
+		ChatID:    job.ChatID,
+		UserID:    "cron",
+		Text:      text,
+		PeerKind:  "dm",
+		AgentID:   job.AgentID, // bypass binding match
+		Origin:    "cron",      // signals "deliver as Notification, not chat reply"
 	}
 }
 

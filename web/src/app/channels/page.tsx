@@ -66,25 +66,51 @@ import {
 
 const CHANNEL_META: Record<
   string,
-  { icon: React.ElementType; gradient: string; label: string; helpUrl?: string }
+  {
+    icon: React.ElementType;
+    gradient: string;
+    label: string;
+    helpUrl?: string;
+    // Per-channel UI strings for the "My chat ID" field. Each channel
+    // calls its recipient address something different — telegram says
+    // "chat ID", slack says "user ID", etc. UI labels accordingly so
+    // users see the term they actually need to look up.
+    myIdLabel: string;
+    myIdPlaceholder: string;
+    myIdHelp?: string;     // short hint shown under the input
+    myIdHelpUrl?: string;  // optional link to "how do I find this"
+  }
 > = {
   telegram: {
     icon: Send,
     gradient: "from-blue-500 to-blue-600",
     label: "Telegram",
     helpUrl: "https://core.telegram.org/bots/tutorial#obtain-your-bot-token",
+    myIdLabel: "My chat ID",
+    myIdPlaceholder: "8175643861",
+    myIdHelp:
+      "Numeric chat ID this bot will send notifications to. Tip: start a chat with @userinfobot — it will reply with your numeric ID.",
+    myIdHelpUrl: "https://t.me/userinfobot",
   },
   discord: {
     icon: Hash,
     gradient: "from-indigo-500 to-indigo-600",
     label: "Discord",
     helpUrl: "https://discord.com/developers/docs/intro",
+    myIdLabel: "My user ID",
+    myIdPlaceholder: "123456789012345678",
+    myIdHelp:
+      "Your Discord user ID (developer mode → right-click your name → Copy User ID). The bot will DM you here.",
   },
   slack: {
     icon: MessageCircle,
     gradient: "from-emerald-500 to-emerald-600",
     label: "Slack",
     helpUrl: "https://api.slack.com/apps",
+    myIdLabel: "My user ID",
+    myIdPlaceholder: "U0XXXXXXX",
+    myIdHelp:
+      "Your Slack user ID (Profile → ⋯ → Copy member ID). The bot will DM you here.",
   },
 };
 
@@ -180,6 +206,7 @@ export default function ChannelsPage() {
           // user typed something new it's the raw token.
           botToken: a.botToken,
           agentId: a.agentId || undefined,
+          myChatId: (a.myChatId ?? "").trim() || undefined,
         })),
       });
       if (!res.ok) {
@@ -542,7 +569,8 @@ function ChannelCard({
         a._new ||
         a._tokenDirty ||
         a.id !== o.id ||
-        (a.agentId ?? "") !== (o.agentId ?? "")
+        (a.agentId ?? "") !== (o.agentId ?? "") ||
+        (a.myChatId ?? "") !== (o.myChatId ?? "")
       );
     });
 
@@ -748,6 +776,7 @@ function AccountRow({
   onTest: () => void;
   onRemove: () => void;
 }) {
+  const meta = CHANNEL_META[channelType];
   return (
     <div className="px-5 py-4 grid gap-3 md:grid-cols-12 items-start">
       {/* Account ID */}
@@ -822,8 +851,43 @@ function AccountRow({
         </Select>
       </div>
 
+      {/* My chat ID — the user's "send to me" address.
+          Per-channel label/placeholder so users see "chat ID" for
+          telegram, "user ID" for slack/discord, etc. Without this
+          configured, agents can't push notifications to this channel
+          (notify tool returns a friendly error). */}
+      <div className="md:col-span-12 space-y-1.5 -mt-1">
+        <div className="flex items-center gap-2">
+          <Label className="text-xs">{meta?.myIdLabel ?? "My address"}</Label>
+          {meta?.myIdHelpUrl && (
+            <a
+              href={meta.myIdHelpUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[10px] text-primary hover:underline inline-flex items-center gap-0.5"
+            >
+              how to find?
+              <ExternalLink className="h-2.5 w-2.5" />
+            </a>
+          )}
+        </div>
+        <Input
+          value={account.myChatId ?? ""}
+          onChange={(e) =>
+            onChange((a) => ({ ...a, myChatId: e.target.value }))
+          }
+          className="font-mono text-xs max-w-md"
+          placeholder={meta?.myIdPlaceholder ?? ""}
+        />
+        {meta?.myIdHelp && (
+          <p className="text-[11px] text-muted-foreground max-w-2xl">
+            {meta.myIdHelp}
+          </p>
+        )}
+      </div>
+
       {/* Actions */}
-      <div className="md:col-span-2 flex items-end justify-end gap-1 h-full pt-5">
+      <div className="md:col-span-12 flex items-end justify-end gap-1 pt-1 -mt-2">
         {channelType === "telegram" && (
           <Button
             variant="ghost"
