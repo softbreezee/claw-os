@@ -158,6 +158,23 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaul
 			}
 		}
 
+		// Inbox normalisation: cron jobs delivered to the in-app
+		// Inbox don't need a chat/account address. Clearing these
+		// avoids two real problems:
+		//   1. UI bug — the Cron Jobs page shows "main → s-…" text
+		//      under Delivery for inbox jobs, which is misleading.
+		//   2. Migration headache — if we ever change Inbox storage,
+		//      we don't want to find junk session IDs in the chatId
+		//      column from cron jobs created in a web chat session.
+		// The originGetter happily fills chatID with the web session
+		// key when the user creates an inbox cron from /chat, which
+		// is wrong for inbox semantics (the inbox is keyed by
+		// notification id, not chat id).
+		if channel == "" || channel == "web" {
+			chatID = ""
+			accountID = ""
+		}
+
 		id := generateUUID()
 		now := time.Now()
 		// NextRun=now means "fire on the scheduler's next poll cycle";

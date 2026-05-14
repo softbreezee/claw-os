@@ -332,31 +332,29 @@ func New(cfg *config.Config) (*Gateway, error) {
 			return "", fmt.Errorf("agent %q not found", task.AgentID)
 		}
 
-		// Decide where the agent's reply should land. Two axes:
-		//   (1) Origin says "this trigger came from cron/webhook/etc"
-		//       (so there's no waiting human in a chat thread).
-		//   (2) Channel says "deliver here". A real channel (telegram,
-		//       slack, discord) means we have a registered chanMgr
-		//       handler; "web" or empty means there's no IM endpoint
-		//       and the only way the user can see the reply is the
-		//       in-app Inbox.
+		// Two axes drive delivery:
+		//   (1) Origin: was this a real human input or an internal
+		//       trigger (cron/webhook/etc)?
+		//   (2) Channel: '' / 'web' = Inbox-only; real channel name
+		//       = also push through that IM.
 		//
-		// Combination matrix:
-		//   internal-origin + real channel  → send to that IM (typing OK)
-		//                                     so cron-on-telegram works.
-		//   internal-origin + web/empty     → write Inbox notification.
-		//   real-user input                 → bus.Outbound (existing).
+		// Internal-origin replies ALWAYS land in the Inbox as a
+		// notification — the Inbox is the OS-level "system log" for
+		// agent activity, every cron fire should be auditable there
+		// regardless of whether it also pings Telegram. Real-channel
+		// internal triggers ALSO push through the IM bot. Plain
+		// human-channel input (real chat) keeps the existing
+		// outbound-only path so we don't double-notify.
 		isInternalOrigin := task.Message.Origin == "cron" ||
 			task.Message.Origin == "webhook" ||
 			task.Message.Origin == "internal"
 		channelIsReal := task.Message.Channel != "" && task.Message.Channel != "web"
-		writeToInbox := isInternalOrigin && !channelIsReal
 
 		var typingDone chan struct{}
 		// Typing indicator: only meaningful for real channels with a
 		// real chat thread. A cron-on-telegram fire still wants the
 		// "typing…" affordance so the user knows a reply is coming.
-		if !writeToInbox && channelIsReal {
+		if isInternalOrigin && channelIsReal {
 			chanMgr.SendTyping(task.Message.Channel, task.AccountID, task.Message.ChatID)
 			typingDone = make(chan struct{})
 			go func() {
@@ -380,9 +378,12 @@ func New(cfg *config.Config) (*Gateway, error) {
 			close(typingDone)
 		}
 
-		if writeToInbox {
-			// Persist as a notification so the user sees it in the
-			// dashboard inbox + (later) gets a browser toast.
+		if isInternalOrigin {
+			// Always write Inbox — it's the audit log for every
+			// cron/webhook/internal fire, even when an IM also
+			// receives a copy. Lets the user catch up on what their
+			// agents have been doing without scrolling Telegram
+			// history.
 			if unifiedStore != nil {
 				if err := writeOriginNotification(unifiedStore, ag.Name(), task.Message, reply); err != nil {
 					slog.Warn("failed to persist notification for internal origin",
@@ -392,12 +393,27 @@ func New(cfg *config.Config) (*Gateway, error) {
 					)
 				}
 			} else {
-				slog.Warn("internal origin reply dropped: no store",
+				slog.Warn("internal origin inbox copy dropped: no store",
 					"origin", task.Message.Origin, "agent", ag.Name())
+			}
+
+			// Then, if the cron job named a real IM channel, push
+			// the reply there too. Outbound goes through chanMgr,
+			// which has its own single-account fallback so empty
+			// AccountID still resolves to the right bot.
+			if channelIsReal {
+				mb.Outbound <- bus.OutboundMessage{
+					Channel:      task.Message.Channel,
+					AccountID:    task.AccountID,
+					ChatID:       task.Message.ChatID,
+					Text:         reply,
+					ReplyToMsgID: task.Message.MessageID,
+				}
 			}
 			return reply, nil
 		}
 
+		// Real human input — original behaviour, single outbound.
 		mb.Outbound <- bus.OutboundMessage{
 			Channel:      task.Message.Channel,
 			AccountID:    task.AccountID,
