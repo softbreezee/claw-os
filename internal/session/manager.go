@@ -35,6 +35,12 @@ type Session struct {
 	agentID   string
 	channel   string
 	sessionID string
+	// ephemeral sessions live entirely in-memory and never touch
+	// disk or the remote store. Used for stateless "internal-origin"
+	// agent invocations (cron fires, webhook deliveries) where the
+	// trigger should NOT pollute the user's chat history. See
+	// NewEphemeralSession().
+	ephemeral bool
 }
 
 // Manager manages sessions, keyed by "channel:chat_id".
@@ -67,6 +73,19 @@ func NewManagerWithRemote(dataDir, agentID string, remote RemoteStore) *Manager 
 
 func sessionKey(channel, chatID string) string {
 	return channel + ":" + chatID
+}
+
+// NewEphemeralSession returns an in-memory-only session that never
+// writes to the file system or remote store. Use this for stateless
+// agent invocations like cron-fire / webhook-delivery where you want
+// the agent to process a message WITHOUT it being recorded in the
+// user's web chat history.
+//
+// The returned Session is not registered with any Manager — it's
+// caller-owned and garbage-collected when references drop. Append /
+// GetMessages / ReplaceMessages all work but are no-ops on disk.
+func NewEphemeralSession() *Session {
+	return &Session{ephemeral: true}
 }
 
 // Get returns or creates a session for the given channel and chat ID.
@@ -114,6 +133,9 @@ func (s *Session) Append(msg provider.Message) {
 	defer s.mu.Unlock()
 
 	s.Messages = append(s.Messages, msg)
+	if s.ephemeral {
+		return // in-memory only — skip file + remote
+	}
 	s.appendToFile(msg)
 
 	if s.remote != nil {
@@ -157,6 +179,9 @@ func (s *Session) ReplaceMessages(msgs []provider.Message) {
 	copy(s.Messages, msgs)
 	s.LastConsolidated = 0
 
+	if s.ephemeral {
+		return // in-memory only — skip file + remote
+	}
 	s.rewriteFile()
 
 	if s.remote != nil {

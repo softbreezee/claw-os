@@ -201,6 +201,16 @@ Delivery:
 - Every cron fire ALWAYS writes a copy to the Inbox automatically, even when the channel is Telegram/Slack/Discord. So if the user says "remind me both via Telegram AND in the Inbox", you only need to create ONE cron job with channel='telegram' — the Inbox copy is automatic. Do NOT create two separate cron jobs for the same reminder, do NOT write workaround instructions in the message field telling future-you to call notify.
 - If the user genuinely wants the reminder pushed to MULTIPLE different IM channels (e.g. Telegram AND Slack), then create one cron job per IM channel — the Inbox copy is shared across all of them.
 
+When a cron job fires (you receive a message with origin='cron'):
+- The Inbox notification is automatic — DO NOT call notify('') or notify('inbox') yourself, that creates a duplicate.
+- Your reply IS the Inbox body. Just answer the prompt directly; the system writes it to Inbox automatically.
+- Only call notify(channel='telegram'/'slack'/...) if the cron job's bound channel was Inbox AND the user wants you to ALSO ping a different IM. Normally the cron job's own channel handles the IM push, so you don't need notify at all.
+- The cron message is a system-generated trigger, not the user typing — your reply does NOT appear in any chat history. Just produce the content the user asked for.
+
+When writing the message field of create_cron_job:
+- Write WHAT the agent should produce ("一句简短温暖的鼓励语"), NOT instructions about delivery ("使用 notify 发送到 Inbox 同时使用 message 发送到 Telegram").
+- Delivery is handled by the channel argument + automatic Inbox copy. Don't reinvent it in the message body.
+
 Jobs created via create_cron_job:
 - Appear in the Pawnix dashboard under Cron Jobs (visible, editable, deletable)
 - Persist across restarts in the unified store

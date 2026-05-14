@@ -588,7 +588,22 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		return result.reply
 	}
 
-	sess := a.sessions.Get(msg.Channel, msg.ChatID)
+	// Internal-origin messages (cron, webhook, agent self-trigger)
+	// must NOT be persisted in the user's chat session — they're
+	// system events, not user input. Using an ephemeral in-memory
+	// session keeps the LLM-call shape identical (we still build a
+	// messages slice the same way) without polluting either the web
+	// chat history (which would show the cron prompt as if you typed
+	// it) or the JSONL/PG session log.
+	var sess *session.Session
+	isInternalOrigin := msg.Origin == "cron" ||
+		msg.Origin == "webhook" ||
+		msg.Origin == "internal"
+	if isInternalOrigin {
+		sess = session.NewEphemeralSession()
+	} else {
+		sess = a.sessions.Get(msg.Channel, msg.ChatID)
+	}
 
 	// Hook: BeforeSystemPrompt
 	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: BeforeSystemPrompt})

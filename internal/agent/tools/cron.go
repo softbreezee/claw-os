@@ -68,7 +68,7 @@ func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, 
 				},
 				"message": map[string]interface{}{
 					"type":        "string",
-					"description": "The prompt that will be re-sent to this agent when the schedule fires.",
+					"description": "The prompt fed back to the agent when the schedule fires. Write WHAT the agent should produce (e.g. '一句简短温暖的鼓励语') — NOT delivery instructions ('用 notify 发送到 Inbox 同时...'). Delivery is handled automatically by the channel argument + automatic Inbox copy on every fire.",
 				},
 				"type": map[string]interface{}{
 					"type":        "string",
