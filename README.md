@@ -8,11 +8,11 @@
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.2%20rebrand-5eead4)](#-roadmap)
+[![Status](https://img.shields.io/badge/status-v0.2.x-5eead4)](#-roadmap)
 
-Multi-agent · Multi-channel · Long-term memory · Skills that learn · Plugins · MCP · Cron · Web dashboard
+Multi-agent · Multi-channel · Long-term memory · Cron + Inbox notifications · MCP · Plugins · Web dashboard
 
-[Install](#-install) · [Quick Start](#-quick-start) · [Roadmap](#-roadmap) · [Architecture](#-architecture) · [Configuration](#-configuration)
+[Install](#-install) · [Quick Start](#-quick-start) · [Channels](#-channels-setup) · [Architecture](#-architecture) · [Roadmap](#-roadmap)
 
 </div>
 
@@ -23,23 +23,80 @@ Multi-agent · Multi-channel · Long-term memory · Skills that learn · Plugins
 Pawnix is **not just an agent runtime** — it's a long-running, self-hosted layer between you and any LLM, designed to behave the way an operating system does for your AI life:
 
 - **Always on.** Daemon supervisor keeps the gateway alive across crashes and config changes.
-- **Multi-agent.** Run a personal team — coder, analyst, scheduler — each with its own personality, memory, and skills, talking via @mentions.
+- **Multi-agent.** Run a personal team — coder, analyst, scheduler — each with its own personality, memory, and skills.
 - **Multi-channel by default.** Same agents, reachable from your browser, Telegram, Discord, Slack, or any custom plugin channel.
-- **Persistent memory.** `MEMORY.md` + searchable conversation logs + pgvector semantic memory. Your agent actually remembers you.
-- **Skills that grow.** Drop a `SKILL.md` and your agent can do new things; agents can also learn new skills from interaction patterns.
-- **Local-first, cloud-optional.** Defaults to plain JSON files in `~/.pawnix/`. Switch to PostgreSQL or SQLite when you outgrow files.
-- **Single binary.** No Docker required, no Python venv, no Node runtime. Cross-compiles for macOS / Linux / Windows.
+- **Notifications as a first-class primitive.** Cron jobs, watchers, and any agent can `notify` you — through the in-app Inbox, browser toasts, or back through your IM channels.
+- **Persistent memory.** `MEMORY.md` + searchable conversation logs + pgvector semantic memory.
+- **Skills that grow.** Drop a `SKILL.md` and your agent can do new things; agents can learn skills from interaction patterns.
+- **Local-first, cloud-optional.** Defaults to plain JSON in `~/.pawnix/`. Switch to PostgreSQL / SQLite when you outgrow files.
+- **Single binary.** No Docker, no Python venv, no Node runtime. Cross-compiles for macOS / Linux / Windows.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/softbreezee/claw-os/main/install.sh | bash
-pawnix    # Opens the setup wizard in your browser
+pawnix    # opens the setup wizard at http://localhost:18953
 ```
 
 ---
 
-## 🗺 Roadmap
+## 📦 Install
 
-Pawnix is built in five layers, each adding a capability that an "AI OS" needs.
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/softbreezee/claw-os/main/install.sh | bash
+
+# Windows: download the .zip from Releases and double-click pawnix.exe
+
+# From source
+git clone https://github.com/softbreezee/claw-os.git
+cd claw-os && make build
+
+# Upgrade
+pawnix upgrade
+```
+
+---
+
+## 🚀 Quick Start
+
+1. Run `pawnix` — the setup wizard opens at `http://localhost:18953`.
+2. Pick an LLM provider (OpenAI, Anthropic, or any OpenAI-compatible endpoint).
+3. Click **Launch** — start chatting in the browser.
+4. Optional: open **Channels** in the sidebar to connect Telegram / Discord / Slack (see below).
+
+---
+
+## 💬 Channels Setup
+
+Connect a chat platform once and the same agents become reachable from anywhere — Web, Telegram, Discord, Slack. Each bot binds to one agent (who handles incoming messages) and carries a **My chat ID** (where push notifications come back to you).
+
+### Telegram
+
+1. **Create a bot.** Talk to [@BotFather](https://t.me/BotFather) → `/newbot` → name it → copy the bot token (`123456789:ABC…`).
+2. **Find your chat ID.** Talk to [@userinfobot](https://t.me/userinfobot) → it replies with your numeric ID (e.g. `8175643861`).
+3. **Add the channel.** Pawnix dashboard → **Channels** → **Add channel** → Telegram → paste the token → bind to an agent → **Save & Restart**.
+4. **Set "My chat ID".** In the Telegram card, paste the ID from step 2 into the **My chat ID** field → **Save & Restart**.
+5. **Done.** Open Telegram, search for your bot, send a message — your agent replies. Cron jobs and `notify(..., channel='telegram')` calls now also push back here.
+
+### Discord
+
+1. **Create a bot.** [Discord Developer Portal](https://discord.com/developers/applications) → New Application → **Bot** tab → reset & copy the token. Enable **MESSAGE CONTENT INTENT**.
+2. **Invite it to your server.** OAuth2 URL Generator → scopes: `bot` → permissions: `Send Messages`, `Read Message History` → open the URL → invite to your server.
+3. **Find your user ID.** Discord → Settings → Advanced → enable Developer Mode → right-click your name → **Copy User ID**.
+4. **Add the channel.** Pawnix dashboard → **Channels** → **Add channel** → Discord → paste the token → bind agent → fill **My user ID** → **Save & Restart**.
+5. **Done.** DM the bot from Discord to talk; cron / `notify` deliver back to your DMs.
+
+### Slack
+
+1. **Create a Slack app** at <https://api.slack.com/apps> with **Socket Mode** enabled.
+2. Generate a **Bot User OAuth Token** (`xoxb-…`) and an **App-Level Token** with `connections:write` (`xapp-…`).
+3. **Find your member ID.** Profile → **⋯** → **Copy member ID** (`U0XXXXXXX`).
+4. **Add the channel.** Channels → Add → Slack → paste both tokens → bind agent → fill **My user ID** → **Save & Restart**.
+
+> The "My chat/user ID" you set is what unlocks **proactive notifications** — any agent can call `notify(text, channel='telegram')` to ping you back here, with no manual chat-ID juggling.
+
+---
+
+## 🗺 Roadmap
 
 ### **v0.1 — Foundation**
 
@@ -51,50 +108,42 @@ Pawnix is built in five layers, each adding a capability that an "AI OS" needs.
 - [x] Skills + Plugins (JSON-RPC subprocess) + MCP (HTTP & stdio)
 - [x] Dual-layer memory (`MEMORY.md` + FTS / pgvector)
 - [x] Cron jobs + per-agent heartbeat
-- [x] Web dashboard at `:18953` for everything
-- [x] Daemon supervisor with crash auto-restart and `restart-aware` exit codes
+- [x] Web dashboard at `:18953`
+- [x] Daemon supervisor with crash auto-restart and restart-aware exit codes
 
-### **v0.2 — The Pawnix Rebrand** &nbsp;`← you are here`
+### **v0.2 — Rebrand & The OS Layer** &nbsp;`← you are here`
 
-> *Surface and depth, both renamed. From FastClaw to Pawnix.*
+> *From FastClaw to Pawnix — and from "agent runtime" to "personal OS".*
 
-- [x] Binary `pawnix` · config dir `~/.pawnix/` · config file `pawnix.json`
-- [x] Go module `github.com/softbreezee/claw-os`
-- [x] New paw-print-in-signal-ring logo + favicon
-- [x] All UI / CLI / agent identity / install scripts use the new name
-- [x] launchd / systemd service labels updated to `ai.pawnix.gateway` / `pawnix-gateway.service`
+- [x] Binary `pawnix` · config dir `~/.pawnix/` · config file `pawnix.json` · module `github.com/softbreezee/claw-os`
+- [x] launchd / systemd labels updated; new logo + favicon; full UI/CLI rename
+- [x] **Cron OS-ification** — single store-backed ledger; UI / agent tool / scheduler all read the same source; cron tools auto-inherit current chat origin (Web → Inbox, Telegram → Telegram)
+- [x] **Inbox + Notifications subsystem** — `store.NotificationRecord` + `/api/notifications` + Sidebar badge + browser-native toast
+- [x] **`notify(text, channel?)` tool** — any agent can push to the user; Inbox by default, IM channels when `MyChatID` is configured
+- [x] **`MyChatID` per channel** — decouples "agent that handles incoming messages" (binding) from "where to push outgoing notifications"
 
-### **v0.3 — The Memory OS** &nbsp;*next*
+### **v0.3 — Memory OS** &nbsp;*next*
 
 > *Make the agent remember you, not just facts.*
 
 - [ ] Memory graph: extract entities and relations from conversations
 - [ ] Time-aware retrieval (recency-weighted scoring)
 - [ ] Cross-agent shared memory pool with permissions
-- [ ] Memory browser UI: visualize, edit, and prune what each agent knows
+- [ ] Memory browser UI: visualize, edit, prune what each agent knows
 - [ ] Skill auto-induction: turn frequent prompt patterns into callable skills
 
 ### **v0.4 — Multi-modal & Voice**
 
-> *Stop requiring a keyboard.*
-
 - [ ] Voice in/out (Whisper STT + pluggable TTS)
 - [ ] Screen understanding (screenshot → multimodal LLM → action)
 - [ ] First-class file ingestion (PDF / video / Excel → memory)
-- [ ] Native voice messages and image streams in Telegram channel
 
 ### **v0.5 — Agent Marketplace**
 
-> *From "my agent" to "an ecosystem."*
-
 - [ ] Skills Hub: a "GitHub for skills" with one-click install
 - [ ] Agent export/import: full bundle (persona + skills + memory schema)
-- [ ] Community catalog and rating
-- [ ] Marketplaced plugins (Obsidian-style)
 
 ### **v0.6 — Distributed Mesh**
-
-> *From "on my laptop" to "across all my devices."*
 
 - [ ] Multi-device sync (laptop + phone + server share state)
 - [ ] P2P session handover (start at home, finish on the road)
@@ -102,225 +151,147 @@ Pawnix is built in five layers, each adding a capability that an "AI OS" needs.
 
 ### **v1.0 — Production Persona**
 
-> *An AI you can trust with important things.*
-
 - [ ] Full audit log (every tool call, traceable & rollback-able)
 - [ ] Permission system v2 (fine-grained, dangerous-op confirmation)
-- [ ] Backup, disaster recovery, and high-availability mode
+- [ ] Backup, disaster recovery, HA mode
 - [ ] Multi-user / team mode
-
----
-
-## 📦 Install
-
-### One-liner (macOS / Linux)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/softbreezee/claw-os/main/install.sh | bash
-```
-
-### Windows
-
-Download the `.zip` from [Releases](https://github.com/softbreezee/claw-os/releases), extract, and double-click `pawnix.exe`.
-
-### From source
-
-```bash
-git clone https://github.com/softbreezee/claw-os.git
-cd claw-os && make build
-```
-
-### Quick environment setup (development)
-
-```bash
-git clone https://github.com/softbreezee/claw-os.git
-cd claw-os
-./setup.sh          # checks Go, Node, PostgreSQL — installs only if you opt in
-```
-
-### Upgrade
-
-```bash
-pawnix upgrade
-```
-
----
-
-## 🚀 Quick Start
-
-1. Run `pawnix` — your browser opens the setup wizard at `http://localhost:18953`.
-2. Pick an LLM provider (OpenAI, Anthropic, or any OpenAI-compatible endpoint).
-3. Click **Launch** — start chatting in the browser.
-4. Open **Channels** in the sidebar, click **Add channel**, paste a Telegram bot token and bind it to an agent. Hit **Save & Restart**. Done.
 
 ---
 
 ## ✨ Features
 
-### Core agent
-
-| Feature | Description |
-|---------|-------------|
-| **ReAct loop** | Multi-turn reasoning + tool calling with configurable max iterations |
-| **Any LLM** | OpenAI-compatible API (OpenAI, Anthropic, DeepSeek, Gemini, GLM, Kimi, Groq, Ollama, OpenRouter) |
-| **Per-call model override** | Pick a different model on a per-message basis without restarting |
-| **Multi-agent** | Independent personality, memory, skills per agent. Team support with `@mention` routing |
-| **Context engineering** | Auto-pruning + LLM-driven compression for long conversations |
-| **Dual-layer memory** | `MEMORY.md` (persistent facts) + FTS-searchable conversation logs |
-| **Skill system** | On-demand `SKILL.md` loading. Agents can learn new skills from interaction patterns |
-| **Hook system** | Before / After hooks on prompts, model calls, and tool calls |
-| **Hot reload** | Edit config or `SOUL.md` → takes effect immediately, no restart |
-
-### Storage
-
-| Backend | Notes |
-|---------|-------|
-| **File** | Default. JSON in `~/.pawnix/`. Zero setup. |
-| **PostgreSQL** | Multi-tenant + `pgvector` HNSW for semantic memory |
-| **SQLite** | Lightweight, with FTS5 full-text search |
-
-### Channels
-
-| Channel | Status |
-|---------|--------|
-| Web Chat (built-in async task system) | ✅ |
-| Telegram (multi-account, multi-bot) | ✅ |
-| Discord | ✅ |
-| Slack (Socket Mode + Web API) | ✅ |
-| Anything else | ✅ via JSON-RPC plugin |
+| Capability | Notes |
+|---|---|
+| **ReAct loop** | Multi-turn reasoning + tool calling, configurable max iterations |
+| **Any LLM** | Any OpenAI-compatible API; per-call model override from the chat UI |
+| **Multi-agent** | Independent persona / memory / skills per agent; team `@mention` routing |
+| **Memory** | `MEMORY.md` + FTS / pgvector; auto-pruning + LLM-driven compression |
+| **Skills** | On-demand `SKILL.md` loading; agents can learn skills from interaction patterns |
+| **Channels** | Web · Telegram · Discord · Slack · custom (JSON-RPC plugin) |
+| **Cron** | Cron expressions / intervals / one-shot — single store-backed ledger |
+| **Inbox** | Cron / webhook / `notify` results land in the dashboard Inbox + browser toast |
+| **`notify(text, channel?)`** | Any agent can push to the user — Inbox by default, IM when `MyChatID` is set |
+| **Hooks** | Before / After hooks on prompts, model calls, tool calls |
+| **Hot reload** | Edit config or `SOUL.md` → takes effect immediately |
+| **Storage** | File (default) · PostgreSQL + pgvector · SQLite + FTS5 |
+| **Security** | Sandbox exec · YAML policy engine · AES-256-GCM credential vault · PII scrubbing · tool-loop detection |
+| **Platform** | Web dashboard · OpenAI-compatible REST · WebSocket · MCP client · daemon mode |
 
 ### Built-in tools
 
-`exec` (with optional Docker sandbox) · `read_file` / `write_file` / `list_dir` · `web_fetch` · `web_search` (Brave) · `memory_search` · `message` · `spawn_subagent` · `create_cron_job` / `list_cron_jobs` / `delete_cron_job` · `load_skill` · `db_query` / `db_create_table` · all MCP tools
-
-### Automation
-
-| Feature | Description |
-|---------|-------------|
-| **Cron** | Cron expressions, intervals, or one-shot timers |
-| **Heartbeat** | Each agent wakes every N minutes to consult `HEARTBEAT.md` |
-| **Webhooks** | `POST /hooks` triggers from external systems |
-| **Distributed locks** | Safe cron in multi-instance deployments |
-
-### Security
-
-Sandbox exec · YAML policy engine (filesystem / network / tool / resource limits) · AES-256-GCM credential vault · optional PII scrubbing · tool-loop detection
-
-### Platform
-
-Web dashboard · OpenAI-compatible REST API (`/v1/chat/completions` SSE) · WebSocket gateway · MCP client (HTTP + stdio) · multi-tenant · daemon mode with auto-restart
+`exec` · `read_file` / `write_file` / `list_dir` · `web_fetch` · `web_search` · `memory_search` · `message` · `notify` · `spawn_subagent` · `create_cron_job` / `list_cron_jobs` / `delete_cron_job` · `load_skill` · `db_query` / `db_create_table` · all MCP tools
 
 ---
 
 ## 🏗 Architecture
 
 ```
-                   ┌────────────────────────────────────────────────────────────┐
-                   │                       Pawnix Gateway                       │
-                   │                                                            │
-   Web UI ───────▶ │   ┌──────────┐               ┌─────────────────────────┐  │
-   Channels ────▶ │   │ Message  │               │      Agent Manager      │  │
-   Plugins ─────▶ │   │   Bus    │──────────────▶│  Agent A · Agent B · …  │  │
-   Webhooks ────▶ │   │          │◀──────────────│  (skills · hooks · mem) │  │
-   API ─────────▶ │   └──────────┘               └────────────┬────────────┘  │
-                   │                                           │                │
-                   │     ┌────────────┬───────────┬────────────┼──────────┐    │
-                   │     ▼            ▼           ▼            ▼          ▼    │
-                   │  ┌──────┐  ┌──────────┐  ┌──────────┐  ┌────────┐ ┌────┐  │
-                   │  │Tools │  │  Memory  │  │ Sessions │  │ Policy │ │Cron│  │
-                   │  └──────┘  └──────────┘  └──────────┘  └────────┘ └────┘  │
-                   │                                                            │
-                   │  ┌────────────────────────────────────────────────────┐    │
-                   │  │  REST · SSE · WebSocket · Webhooks · Web UI :18953 │    │
-                   │  └────────────────────────────────────────────────────┘    │
-                   └────────────────────────────────────────────────────────────┘
+                ┌────────────────────────────────────────────────────────────┐
+                │                       Pawnix Gateway                       │
+                │                                                            │
+   Web UI ────▶ │   ┌──────────┐               ┌─────────────────────────┐  │
+   Channels ──▶ │   │ Message  │               │      Agent Manager      │  │
+   Plugins ───▶ │   │   Bus    │──────────────▶│  Agent A · Agent B · …  │  │
+   Webhooks ──▶ │   │          │◀──────────────│  (skills · hooks · mem) │  │
+   API ───────▶ │   └──────────┘               └────────────┬────────────┘  │
+                │                                           │                │
+                │   ┌─────────┬───────────┬─────────────┬───┴─────┬──────┐  │
+                │   ▼         ▼           ▼             ▼         ▼      ▼  │
+                │ Tools     Memory     Sessions       Policy    Cron  Inbox │
+                │                                                            │
+                │   ┌────────────────────────────────────────────────────┐  │
+                │   │  REST · SSE · WebSocket · Webhooks · Web UI :18953 │  │
+                │   └────────────────────────────────────────────────────┘  │
+                └────────────────────────────────────────────────────────────┘
 
-                   ┌─────── daemon supervisor (crash + restart aware) ───────┐
+                ┌────── daemon supervisor (crash + restart aware) ──────┐
 ```
 
-The daemon supervisor (`pawnix daemon __run`) wraps the gateway in a restart loop and recognises **exit code 75** as "restart-on-purpose" (used by the **Save & Restart** button), so config changes apply atomically without manual restarts.
+The daemon supervisor (`pawnix daemon __run`) wraps the gateway in a restart loop and recognises **exit code 75** as "restart-on-purpose" (used by **Save & Restart** in the UI), so config changes apply atomically.
+
+### Notifications & cron data flow
+
+```
+   ┌─── single store ledger (cron_jobs, notifications) ───┐
+   │                                                       │
+   ▼                                                       │
+[scheduler.pollStore]   ◄── store.SaveCronJob ◄──── UI / agent's create_cron_job
+   │
+   │ fire (msg.AgentID + msg.Origin='cron')
+   ▼
+[routing.routeDM] ──► [agent.HandleMessage] ──► reply
+                                                  │
+                ┌─────────────────────────────────┴────────────────────┐
+                │                                                       │
+                ▼                                                       ▼
+   Channel='' or 'web'                                  Channel='telegram' / 'slack' / …
+        │                                                       │
+        ▼                                                       ▼
+   store.SaveNotification                              bus.Outbound → chanMgr → IM bot
+        │                                                       │
+        ▼                                                       ▼
+   Sidebar badge + browser toast                         Push lands in Telegram / Slack
+```
+
+The same `notify(text, channel?)` tool — usable by any agent, not just the one bound to the channel — lets watchers, finished long-running tasks, and proactive alerts share this pipeline.
 
 ---
 
 ## 🔧 Configuration
 
-Pawnix reads `~/.pawnix/pawnix.json` on startup.
-
-### Storage
-
-```json
-{
-  "storage": {
-    "type": "postgres",
-    "dsn": "postgres://user:pass@localhost:5432/pawnix?sslmode=disable",
-    "autoMigrate": true
-  }
-}
-```
-
-Supported types: `"file"` (default), `"postgres"`, `"sqlite"`.
-
-### LLM providers
+Pawnix reads `~/.pawnix/pawnix.json` on startup. The dashboard manages most of this for you; the snippets below are for power users.
 
 ```json
 {
   "providers": {
     "openai":   { "apiKey": "${OPENAI_API_KEY}",   "apiBase": "https://api.openai.com/v1",      "apiType": "openai" },
     "deepseek": { "apiKey": "${DEEPSEEK_API_KEY}", "apiBase": "https://api.deepseek.com/v1",   "apiType": "openai" }
-  }
-}
-```
+  },
 
-### Multi-agent + bindings
-
-```json
-{
   "agents": {
     "defaults": { "model": "deepseek/deepseek-v4-pro", "maxTokens": 8192, "temperature": 0.7, "thinking": "medium" },
     "list": [
-      { "id": "coder",   "model": "anthropic/claude-sonnet-4.5", "skills": ["debugging", "tdd"],            "thinking": "high"   },
-      { "id": "analyst", "model": "deepseek/deepseek-v4-flash",  "skills": ["financial-modeling"],          "thinking": "medium" }
+      { "id": "coder",   "model": "anthropic/claude-sonnet-4.5", "skills": ["debugging", "tdd"] },
+      { "id": "analyst", "model": "deepseek/deepseek-v4-flash",  "skills": ["financial-modeling"] }
     ]
   },
-  "bindings": [
-    { "agentId": "coder", "match": { "channel": "telegram", "accountId": "main" } }
-  ]
-}
-```
 
-### Channels (managed via UI)
-
-```json
-{
   "channels": {
     "telegram": {
       "enabled": true,
       "accounts": {
-        "main": { "botToken": "123456:ABC..." }
+        "main": {
+          "botToken": "123456:ABC...",
+          "myChatId": "8175643861"
+        }
       }
     }
-  }
-}
-```
+  },
 
-> Edit channels through the **Channels** page in the dashboard — it handles token masking, agent binding, and triggers the daemon to restart cleanly via the supervisor.
+  "bindings": [
+    { "agentId": "coder", "match": { "channel": "telegram", "accountId": "main" } }
+  ],
 
-### MCP servers
+  "storage": {
+    "type": "postgres",
+    "dsn": "postgres://user:pass@localhost:5432/pawnix?sslmode=disable",
+    "autoMigrate": true
+  },
 
-```json
-{
   "mcpServers": {
     "brave-search": { "type": "http",  "url": "https://api.search.brave.com/mcp", "headers": { "Authorization": "Bearer ${BRAVE_API_KEY}" } },
-    "local-tool":   { "type": "stdio", "command": "python", "args": ["-m", "my_mcp_server"], "env": { "API_KEY": "${MY_API_KEY}" } }
+    "local-tool":   { "type": "stdio", "command": "python", "args": ["-m", "my_mcp_server"] }
   }
 }
 ```
+
+Storage backends: `"file"` (default), `"postgres"`, `"sqlite"`.
 
 ---
 
 ## 🔌 Plugins
 
-Pawnix plugins are subprocesses that speak JSON-RPC 2.0 over stdin/stdout — write them in Python, Node, Go, anything.
+Pawnix plugins are subprocesses speaking JSON-RPC 2.0 over stdin/stdout — write them in Python, Node, Go, anything.
 
 **Plugin types:** `channel` · `tool` · `provider` · `hook`
 
@@ -336,17 +307,18 @@ Official plugins live in [`plugins/`](plugins/).
 
 ## 🖥 Web Dashboard
 
-Available at `http://localhost:18953`:
+`http://localhost:18953`
 
 | Page | What it does |
-|------|--------------|
-| **Overview** | Gateway status, stats, quick actions, channel CTA |
+|---|---|
+| **Overview** | Gateway status, stats, quick actions |
 | **Chat** | Talk to your agents in the browser, async task-based |
+| **Inbox** | Cron / webhook / agent-initiated notifications + browser toasts |
 | **Agents** | Create / edit / delete agents, edit `SOUL.md`, `MEMORY.md` |
 | **Models** | Manage providers and the default model |
 | **Skills** | Browse and manage installed skills |
 | **Plugins** | Enable / disable / configure plugins |
-| **Channels** | Add Telegram / Discord / Slack accounts and bind to agents |
+| **Channels** | Add Telegram / Discord / Slack accounts; bind agents; set "My chat ID" for push |
 | **Cron Jobs** | Create and manage scheduled tasks |
 | **Apps** | Quick-launch companion dashboards |
 | **Settings** | Storage backend, webhook, gateway config |
@@ -355,54 +327,39 @@ Available at `http://localhost:18953`:
 
 ## 🔗 API
 
-OpenAI-compatible:
-
 ```bash
+# OpenAI-compatible chat
 curl -X POST http://localhost:18953/v1/chat/completions \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"model":"auto","messages":[{"role":"user","content":"hello"}],"stream":true}'
 ```
 
-WebSocket (OpenClaw-compatible):
-
 ```javascript
+// WebSocket (OpenClaw-compatible)
 const ws = new WebSocket('ws://localhost:18953/ws');
 ws.send(JSON.stringify({ type: 'chat', message: 'hello' }));
 ```
 
+Internal endpoints (Pawnix-native): `/api/cron`, `/api/notifications`, `/api/channels`, `/api/agents`, `/api/chat/...`, `/api/daemon/restart`.
+
 ---
 
-## 🛠 CLI Reference
+## 🛠 CLI
 
 ```bash
-# Core
-pawnix                      # Start (setup wizard or gateway)
-pawnix gateway              # Start gateway explicitly
-pawnix version              # Version info
-pawnix doctor               # Check config health
-pawnix upgrade              # Update to latest
+pawnix                      # start (setup wizard or gateway)
+pawnix gateway              # start gateway explicitly
+pawnix doctor               # check config health
+pawnix upgrade              # update to latest
 
-# Daemon
-pawnix daemon start         # Start as background daemon
-pawnix daemon stop          # Stop
-pawnix daemon restart       # Restart
-pawnix daemon status        # Status check
+pawnix daemon start|stop|restart|status
 
-# Plugins
-pawnix plugins install NAME
-pawnix plugins list
-pawnix plugins remove ID
+pawnix plugins install <name|repo|path>
+pawnix plugins list|remove
 
-# Agents
-pawnix agent create <name>
-pawnix agent list
-
-# Other
-pawnix migrate              # Migrate JSONL sessions → PostgreSQL
-pawnix session ...
-pawnix provider ...
-pawnix policy ...
+pawnix agent create|list
+pawnix migrate              # JSONL sessions → PostgreSQL
 pawnix backup
 ```
 
@@ -413,30 +370,29 @@ pawnix backup
 ```bash
 git clone https://github.com/softbreezee/claw-os.git
 cd claw-os
+./setup.sh           # checks (and offers to install) Go, Node, PostgreSQL
 
-./setup.sh           # check (or install) Go, Node, PostgreSQL
-
-make build           # binary + embedded web UI
-make build-web       # web UI only
-make dev             # dev mode with hot reload
-make release-local   # all platforms
+make build           # binary + embedded web UI (production)
+make dev-build       # fast local rebuild after `cd web && pnpm build`
+make dev             # hot reload via air
 make test
+make release-local   # all platforms
 ```
 
-### Workspace structure
+### Workspace layout
 
 ```
 ~/.pawnix/
-├── pawnix.json             # Main config
-├── pawnix.pid              # Daemon PID (single source of truth)
-├── logs/gateway.log        # Daemon log
+├── pawnix.json             # main config
+├── pawnix.pid              # daemon PID
+├── cron_jobs.json          # cron ledger (file backend)
+├── notifications.json      # inbox ledger (file backend)
+├── logs/gateway.log
 ├── agents/<id>/agent/      # SOUL / MEMORY / IDENTITY / sessions / skills / ...
-└── plugins/                # Installed plugins
+└── plugins/
 ```
 
-### PostgreSQL schema (when `storage.type = "postgres"`)
-
-`configs` · `agents` · `workspace_files` · `sessions` · `memory_logs` · `cron_jobs` · `chat_tasks` · `memories` · `research_data` · `schema_registry`
+PostgreSQL tables (when `storage.type = "postgres"`): `configs` · `agents` · `workspace_files` · `sessions` · `memory_logs` · `cron_jobs` · `notifications` · `chat_tasks` · `memories` · `research_data` · `schema_registry`
 
 ---
 
