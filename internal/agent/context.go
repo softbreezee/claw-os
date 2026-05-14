@@ -174,6 +174,12 @@ DO NOT:
 - Call the exec tool with crontab, launchctl, schtasks, or systemctl
 - Write a shell script and register it with the system scheduler
 - Tell the user to run "crontab -e" themselves
+- Use the message tool to "send the reminder yourself" when the time comes — that's the scheduler's job
+
+Delivery:
+- create_cron_job AUTOMATICALLY delivers reminders back through whatever channel the user is currently talking to you in. Talking via Telegram → reminders come on Telegram. Talking via Web → reminders appear in the Pawnix Inbox (and as browser notifications when enabled).
+- You normally do NOT need to specify channel/chatId — leave them empty and the system uses the current chat as the destination.
+- Only set the channel argument explicitly if the user asks for a different destination ("send it to my Slack instead").
 
 Jobs created via create_cron_job:
 - Appear in the Pawnix dashboard under Cron Jobs (visible, editable, deletable)

@@ -319,17 +319,31 @@ func New(cfg *config.Config) (*Gateway, error) {
 			return "", fmt.Errorf("agent %q not found", task.AgentID)
 		}
 
-		// Cron / webhook / internal triggers don't have a real chat
-		// to type into and have no outbound channel to receive the
-		// reply. Skip the typing indicator and route the reply to
-		// the notifications subsystem instead — that's the only way
-		// the user actually sees these in the dashboard.
+		// Decide where the agent's reply should land. Two axes:
+		//   (1) Origin says "this trigger came from cron/webhook/etc"
+		//       (so there's no waiting human in a chat thread).
+		//   (2) Channel says "deliver here". A real channel (telegram,
+		//       slack, discord) means we have a registered chanMgr
+		//       handler; "web" or empty means there's no IM endpoint
+		//       and the only way the user can see the reply is the
+		//       in-app Inbox.
+		//
+		// Combination matrix:
+		//   internal-origin + real channel  → send to that IM (typing OK)
+		//                                     so cron-on-telegram works.
+		//   internal-origin + web/empty     → write Inbox notification.
+		//   real-user input                 → bus.Outbound (existing).
 		isInternalOrigin := task.Message.Origin == "cron" ||
 			task.Message.Origin == "webhook" ||
 			task.Message.Origin == "internal"
+		channelIsReal := task.Message.Channel != "" && task.Message.Channel != "web"
+		writeToInbox := isInternalOrigin && !channelIsReal
 
 		var typingDone chan struct{}
-		if !isInternalOrigin {
+		// Typing indicator: only meaningful for real channels with a
+		// real chat thread. A cron-on-telegram fire still wants the
+		// "typing…" affordance so the user knows a reply is coming.
+		if !writeToInbox && channelIsReal {
 			chanMgr.SendTyping(task.Message.Channel, task.AccountID, task.Message.ChatID)
 			typingDone = make(chan struct{})
 			go func() {
@@ -353,7 +367,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 			close(typingDone)
 		}
 
-		if isInternalOrigin {
+		if writeToInbox {
 			// Persist as a notification so the user sees it in the
 			// dashboard inbox + (later) gets a browser toast.
 			if unifiedStore != nil {

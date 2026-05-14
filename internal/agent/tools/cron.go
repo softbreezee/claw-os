@@ -10,6 +10,12 @@ import (
 	"github.com/softbreezee/claw-os/internal/store"
 )
 
+// ChatOriginGetter pulls the current chat's delivery info out of ctx.
+// We accept it as an injected function rather than importing
+// internal/agent here to avoid the agent → tools → agent import cycle.
+// Gateway/agent code wires the real getter at registration time.
+type ChatOriginGetter func(ctx context.Context) (channel, accountID, chatID string)
+
 type createCronJobArgs struct {
 	Name     string `json:"name"`
 	Schedule string `json:"schedule"`
@@ -28,7 +34,15 @@ type deleteCronJobArgs struct {
 }
 
 // RegisterCronTools registers cron job management tools.
-func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, chatID string) {
+//
+// channel / chatID are the FALLBACK delivery target — used when
+// originGetter is nil or returns empty values. In practice the
+// gateway always passes channel="" / chatID="" + a non-nil
+// originGetter, which means cron jobs created from a Telegram chat
+// default to delivering back through Telegram, while web-chat ones
+// default to the in-app Inbox. Per-call args.Channel still wins on
+// top of both.
+func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, chatID string, originGetter ChatOriginGetter) {
 	r.Register("create_cron_job",
 		"Create a scheduled task that fires the given prompt back at this agent on a schedule. "+
 			"Prefer this over writing shell scripts to the system crontab — jobs created here "+
@@ -55,7 +69,7 @@ func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, 
 			},
 			"required": []string{"name", "schedule", "message"},
 		},
-		makeCreateCronJob(st, tenantID, agentID, channel, chatID),
+		makeCreateCronJob(st, tenantID, agentID, channel, chatID, originGetter),
 	)
 
 	r.Register("list_cron_jobs",
@@ -83,7 +97,7 @@ func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, 
 	)
 }
 
-func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaultChatID string) ToolFunc {
+func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaultChatID string, originGetter ChatOriginGetter) ToolFunc {
 	return func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 		var args createCronJobArgs
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
@@ -97,15 +111,28 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaul
 			jobType = "cron"
 		}
 
-		// Per-call channel override falls through to the values bound
-		// when the tool was registered. This lets a Telegram-bound
-		// agent default to telegram delivery, while a web-chat agent
-		// gets channel="" (in-process web reminder).
+		// Resolution order for channel/accountID/chatID:
+		//   1. Explicit args from the tool call (LLM said "send to
+		//      telegram chat 999")
+		//   2. Current chat origin from ctx (the user is talking to
+		//      the agent in Telegram → reminder also goes to Telegram)
+		//   3. Defaults bound at register time (legacy fallback)
 		channel := args.Channel
+		chatID := args.ChatID
+		var accountID string
+		if originGetter != nil {
+			oc, oa, oid := originGetter(ctx)
+			if channel == "" {
+				channel = oc
+			}
+			if chatID == "" {
+				chatID = oid
+			}
+			accountID = oa
+		}
 		if channel == "" {
 			channel = defaultChannel
 		}
-		chatID := args.ChatID
 		if chatID == "" {
 			chatID = defaultChatID
 		}
@@ -127,6 +154,7 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaul
 			Message:   args.Message,
 			Channel:   channel,
 			ChatID:    chatID,
+			AccountID: accountID,
 			Timezone:  "Local",
 			Enabled:   true,
 			NextRun:   &now,
@@ -137,7 +165,21 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaul
 			return "", fmt.Errorf("save cron job: %w", err)
 		}
 
-		return fmt.Sprintf("Cron job created successfully.\nID: %s\nName: %s\nSchedule: %s\nType: %s\nIt will appear in the Pawnix UI under Cron Jobs and start firing on the next poll cycle (within 60s).", id, args.Name, args.Schedule, jobType), nil
+		// Tell the LLM where the reminder will land so it can echo
+		// the right thing back to the user ("I'll ping you on
+		// Telegram every morning"). The "via" line is omitted for
+		// web-Inbox jobs since the user is already in the app.
+		via := ""
+		switch channel {
+		case "", "web":
+			via = "Inbox"
+		default:
+			via = channel
+			if accountID != "" {
+				via = via + "/" + accountID
+			}
+		}
+		return fmt.Sprintf("Cron job created successfully.\nID: %s\nName: %s\nSchedule: %s\nType: %s\nDelivery: %s\nIt will fire on the next scheduler poll (within 60s).", id, args.Name, args.Schedule, jobType, via), nil
 	}
 }
 

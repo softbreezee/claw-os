@@ -186,7 +186,16 @@ func (a *Agent) SetCronStore(st store.Store) {
 	if a.registry == nil || st == nil {
 		return
 	}
-	tools.RegisterCronTools(a.registry, st, store.DefaultTenantID, a.name, "", "")
+	// originGetter pulls the current chat's channel/chatID/accountID
+	// off ctx so a cron job created from a Telegram conversation
+	// defaults to delivering reminders back through Telegram. The
+	// HandleMessage path (loop.go:HandleMessage) stashes the chat
+	// origin onto ctx via ContextWithChatOrigin before calling tools.
+	originGetter := func(ctx context.Context) (string, string, string) {
+		o := ChatOriginFromContext(ctx)
+		return o.Channel, o.AccountID, o.ChatID
+	}
+	tools.RegisterCronTools(a.registry, st, store.DefaultTenantID, a.name, "", "", originGetter)
 }
 
 // NewAgentWithSkillsCfg creates a new Agent with global skills config for env injection.
@@ -548,6 +557,16 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	if len(msg.Attachments) > 0 {
 		ctx = ContextWithAttachments(ctx, msg.Attachments)
 	}
+
+	// Stash the inbound's delivery info so tools that produce future
+	// messages (currently: create_cron_job; later: webhook tools, etc)
+	// can default to delivering back through the same channel/chat
+	// the user is talking from. Telegram → Telegram, Web → Web Inbox.
+	ctx = ContextWithChatOrigin(ctx, ChatOrigin{
+		Channel:   msg.Channel,
+		AccountID: msg.AccountID,
+		ChatID:    msg.ChatID,
+	})
 
 	// Check for slash commands first
 	if result := a.handleSlashCommand(msg); result.handled {
