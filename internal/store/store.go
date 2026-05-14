@@ -48,6 +48,19 @@ type Store interface {
 	LockCronJob(ctx context.Context, jobID, instanceID string) (bool, error)
 	UpdateCronJobRun(ctx context.Context, jobID string, lastRun, nextRun time.Time) error
 
+	// Notifications. The OS-level inbox: cron job results, finished
+	// long-running tasks, webhook deliveries, agent-initiated alerts
+	// all funnel through here. Filters keep the API ergonomic enough
+	// for the dashboard's "unread badge" + "list with pagination"
+	// patterns without forcing every backend to support a query DSL.
+	ListNotifications(ctx context.Context, tenantID string, filters NotificationFilters) ([]NotificationRecord, error)
+	CountUnreadNotifications(ctx context.Context, tenantID string) (int, error)
+	GetNotification(ctx context.Context, tenantID, id string) (*NotificationRecord, error)
+	SaveNotification(ctx context.Context, tenantID string, n *NotificationRecord) error
+	MarkNotificationRead(ctx context.Context, tenantID, id string, read bool) error
+	MarkAllNotificationsRead(ctx context.Context, tenantID string) error
+	DeleteNotification(ctx context.Context, tenantID, id string) error
+
 	// Tasks (web chat async tasks).
 	// FileStore implements only the per-task methods; ListChatTasks returns
 	// ErrNotSupported on file backend so callers should feature-detect.
@@ -169,6 +182,38 @@ type ChatTaskFilters struct {
 	SessionKey string         // optional, exact match
 	Status     ChatTaskStatus // optional, exact match
 	Limit      int            // 0 = backend default (typically 50)
+	Offset     int
+}
+
+// NotificationRecord is one inbox entry shown to the user.
+//
+// Source identifies which subsystem produced the notification so the
+// UI can group/filter; Link is an optional in-app deep link the UI
+// should jump to when the user clicks (e.g. "/cron" for a cron-job
+// failure, "/chat?session=abc" for a chat task that finished).
+type NotificationRecord struct {
+	ID        string    `json:"id"`
+	TenantID  string    `json:"tenantId"`
+	AgentID   string    `json:"agentId,omitempty"` // who produced the body, if any
+	Source    string    `json:"source"`            // "cron" | "task" | "webhook" | "system" | "agent"
+	SourceID  string    `json:"sourceId,omitempty"` // e.g. cron job ID
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	Link      string    `json:"link,omitempty"`
+	Read      bool      `json:"read"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// NotificationFilters narrows ListNotifications results. UnreadOnly
+// is a separate flag rather than overloading Read because all three
+// states (true, false, both) are useful: the UI filter chip wants
+// "only unread", the read-receipts page wants "all", and a future
+// "show me last week's reads" view wants "only read".
+type NotificationFilters struct {
+	AgentID    string
+	Source     string
+	UnreadOnly bool
+	Limit      int // 0 = backend default (typically 50)
 	Offset     int
 }
 

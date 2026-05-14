@@ -18,10 +18,12 @@ import {
   Moon,
   Circle,
   AppWindow,
+  Inbox,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useTheme } from "@/components/theme-provider";
 import { Logo } from "@/components/logo";
+import { useUnreadNotifications } from "@/lib/use-notifications";
 
 const navGroups = [
   {
@@ -29,6 +31,9 @@ const navGroups = [
     items: [
       { href: "/overview/", label: "Overview", icon: LayoutDashboard },
       { href: "/chat/", label: "Chat", icon: MessageSquare },
+      // Inbox carries an unread badge populated by useUnreadNotifications.
+      // Placed in Core so users see it on every page without scrolling.
+      { href: "/inbox/", label: "Inbox", icon: Inbox, badge: "inbox" as const },
     ],
   },
   {
@@ -52,6 +57,10 @@ const navGroups = [
 ];
 
 function NavLinks({ onClick, pathname }: { onClick?: () => void; pathname: string }) {
+  // Single subscription per sidebar instance keeps the polling cost
+  // bounded regardless of how many nav items eventually want a badge.
+  const unreadCount = useUnreadNotifications();
+
   return (
     <div className="space-y-4">
       {navGroups.map((group) => (
@@ -62,6 +71,7 @@ function NavLinks({ onClick, pathname }: { onClick?: () => void; pathname: strin
           <div className="space-y-0.5">
             {group.items.map((item) => {
               const isActive = pathname === item.href || pathname.startsWith(item.href);
+              const badgeCount = item.badge === "inbox" ? unreadCount : 0;
               return (
                 <Link
                   key={item.href}
@@ -74,9 +84,14 @@ function NavLinks({ onClick, pathname }: { onClick?: () => void; pathname: strin
                   }`}
                 >
                   <item.icon className={`h-4 w-4 ${isActive ? "text-primary" : ""}`} />
-                  {item.label}
-                  {isActive && (
-                    <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />
+                  <span className="flex-1">{item.label}</span>
+                  {badgeCount > 0 && (
+                    <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
+                      {badgeCount > 99 ? "99+" : badgeCount}
+                    </span>
+                  )}
+                  {badgeCount === 0 && isActive && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary" />
                   )}
                 </Link>
               );

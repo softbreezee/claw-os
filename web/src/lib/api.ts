@@ -100,6 +100,18 @@ export interface CronJobInfo {
   createdAt?: string; // RFC3339; from store, used to display "added 2h ago"
 }
 
+export interface NotificationInfo {
+  id: string;
+  agentId: string;
+  source: string;     // "cron" | "webhook" | "system" | "agent"
+  sourceId: string;
+  title: string;
+  body: string;
+  link: string;
+  read: boolean;
+  createdAt: string;  // RFC3339
+}
+
 export interface ModelCost {
   input: number;
   output: number;
@@ -655,6 +667,54 @@ export async function runCronJobNow(id: string) {
   const res = await fetch(`/api/cron/${id}/run`, {
     method: "POST",
   });
+  return res.json();
+}
+
+// --- Notifications (the OS-level inbox) ---
+
+export interface NotificationListParams {
+  unreadOnly?: boolean;
+  source?: string;
+  agentId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function getNotifications(params: NotificationListParams = {}): Promise<NotificationInfo[]> {
+  const q = new URLSearchParams();
+  if (params.unreadOnly) q.set("unreadOnly", "true");
+  if (params.source) q.set("source", params.source);
+  if (params.agentId) q.set("agentId", params.agentId);
+  if (params.limit) q.set("limit", String(params.limit));
+  if (params.offset) q.set("offset", String(params.offset));
+  const qs = q.toString();
+  const res = await fetch(`/api/notifications${qs ? `?${qs}` : ""}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function getUnreadNotificationCount(): Promise<{ count: number }> {
+  const res = await fetch("/api/notifications/unread-count");
+  if (!res.ok) return { count: 0 };
+  return res.json();
+}
+
+export async function markNotificationRead(id: string, read = true) {
+  const res = await fetch(`/api/notifications/${id}/read`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ read }),
+  });
+  return res.json();
+}
+
+export async function markAllNotificationsRead() {
+  const res = await fetch("/api/notifications/read-all", { method: "POST" });
+  return res.json();
+}
+
+export async function deleteNotification(id: string) {
+  const res = await fetch(`/api/notifications/${id}`, { method: "DELETE" });
   return res.json();
 }
 

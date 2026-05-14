@@ -173,19 +173,25 @@ func New(cfg *config.Config) (*Gateway, error) {
 		unifiedStore = nil
 	}
 
-	// Ensure the cron_jobs table exists on database backends. The
-	// FileStore creates ~/.pawnix/cron_jobs.json lazily on first
-	// SaveCronJob so it doesn't need an explicit migration call.
-	// We deliberately migrate just this one table rather than running
-	// the full legacy Migrate() set — the historical migrationSQL
-	// includes memory_logs (AUTOINCREMENT, SQLite-only) and other
-	// dialect-specific quirks that fail under Postgres.
+	// Ensure the cron_jobs + notifications tables exist on database
+	// backends. FileStore creates the corresponding JSON files lazily
+	// so it doesn't need explicit migration calls. We deliberately
+	// migrate just these tables rather than running the full legacy
+	// Migrate() set — the historical migrationSQL includes
+	// memory_logs (AUTOINCREMENT, SQLite-only) and other dialect-
+	// specific quirks that fail under Postgres.
 	if dbs, ok := unifiedStore.(*store.DBStore); ok {
 		if err := dbs.MigrateCronJobs(context.Background()); err != nil {
 			slog.Warn("cron_jobs migration failed; UI/agent cron will return errors",
 				"error", err)
 		} else {
 			slog.Info("cron_jobs table ready")
+		}
+		if err := dbs.MigrateNotifications(context.Background()); err != nil {
+			slog.Warn("notifications migration failed; inbox will return errors",
+				"error", err)
+		} else {
+			slog.Info("notifications table ready")
 		}
 	}
 
@@ -313,26 +319,57 @@ func New(cfg *config.Config) (*Gateway, error) {
 			return "", fmt.Errorf("agent %q not found", task.AgentID)
 		}
 
-		// Send typing indicator and keep sending every 5s until done
-		chanMgr.SendTyping(task.Message.Channel, task.AccountID, task.Message.ChatID)
-		typingDone := make(chan struct{})
-		go func() {
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-typingDone:
-					return
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					chanMgr.SendTyping(task.Message.Channel, task.AccountID, task.Message.ChatID)
+		// Cron / webhook / internal triggers don't have a real chat
+		// to type into and have no outbound channel to receive the
+		// reply. Skip the typing indicator and route the reply to
+		// the notifications subsystem instead — that's the only way
+		// the user actually sees these in the dashboard.
+		isInternalOrigin := task.Message.Origin == "cron" ||
+			task.Message.Origin == "webhook" ||
+			task.Message.Origin == "internal"
+
+		var typingDone chan struct{}
+		if !isInternalOrigin {
+			chanMgr.SendTyping(task.Message.Channel, task.AccountID, task.Message.ChatID)
+			typingDone = make(chan struct{})
+			go func() {
+				ticker := time.NewTicker(5 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-typingDone:
+						return
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						chanMgr.SendTyping(task.Message.Channel, task.AccountID, task.Message.ChatID)
+					}
 				}
-			}
-		}()
+			}()
+		}
 
 		reply := ag.HandleMessage(ctx, task.Message)
-		close(typingDone)
+		if typingDone != nil {
+			close(typingDone)
+		}
+
+		if isInternalOrigin {
+			// Persist as a notification so the user sees it in the
+			// dashboard inbox + (later) gets a browser toast.
+			if unifiedStore != nil {
+				if err := writeOriginNotification(unifiedStore, ag.Name(), task.Message, reply); err != nil {
+					slog.Warn("failed to persist notification for internal origin",
+						"origin", task.Message.Origin,
+						"agent", ag.Name(),
+						"error", err,
+					)
+				}
+			} else {
+				slog.Warn("internal origin reply dropped: no store",
+					"origin", task.Message.Origin, "agent", ag.Name())
+			}
+			return reply, nil
+		}
 
 		mb.Outbound <- bus.OutboundMessage{
 			Channel:      task.Message.Channel,

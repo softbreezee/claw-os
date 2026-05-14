@@ -45,16 +45,38 @@ func (g *Gateway) processInbound(ctx context.Context) {
 	}
 }
 
-// routeDM handles direct message routing (existing behavior).
+// routeDM handles direct message routing.
+//
+// Two paths:
+//  1. msg.AgentID is set (cron / webhook / internal origins): we trust
+//     it and resolve directly via the agent manager, skipping
+//     cfg.Bindings. This is what makes "create_cron_job → fire 60s
+//     later → agent actually receives it" work, since web-channel cron
+//     reminders have no binding to match against.
+//  2. msg.AgentID is empty (real channel input): fall through to the
+//     historical binding-based matching.
 func (g *Gateway) routeDM(ctx context.Context, msg bus.InboundMessage) {
-	ag := g.matchAgent(msg)
-	if ag == nil {
-		slog.Warn("no agent matched for DM, dropping",
-			"channel", msg.Channel,
-			"account", msg.AccountID,
-			"chat_id", msg.ChatID,
-		)
-		return
+	var ag *agent.Agent
+	if msg.AgentID != "" {
+		ag = g.agents.AgentByID(msg.AgentID)
+		if ag == nil {
+			slog.Warn("explicit agentID has no matching agent, dropping",
+				"channel", msg.Channel,
+				"agent_id", msg.AgentID,
+				"origin", msg.Origin,
+			)
+			return
+		}
+	} else {
+		ag = g.matchAgent(msg)
+		if ag == nil {
+			slog.Warn("no agent matched for DM, dropping",
+				"channel", msg.Channel,
+				"account", msg.AccountID,
+				"chat_id", msg.ChatID,
+			)
+			return
+		}
 	}
 
 	slog.Info("routing DM",
@@ -62,6 +84,7 @@ func (g *Gateway) routeDM(ctx context.Context, msg bus.InboundMessage) {
 		"account", msg.AccountID,
 		"chat_id", msg.ChatID,
 		"agent", ag.Name(),
+		"origin", msg.Origin,
 	)
 
 	g.taskQueue.Submit(ag.Name(), chatKey(msg.Channel, msg.ChatID), msg, msg.AccountID)

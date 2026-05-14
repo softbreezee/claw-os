@@ -416,6 +416,181 @@ func (f *FileStore) UpdateCronJobRun(ctx context.Context, jobID string, lastRun,
 	return fmt.Errorf("cron job not found: %s", jobID)
 }
 
+// --- Notifications ---
+//
+// Stored as a single JSON file (~/.pawnix/notifications.json) for the
+// FileStore backend. Same trade-off as cron_jobs.json: simple,
+// human-inspectable, fine for single-user installs of any reasonable
+// size. The DB backend keeps the same shape but indexes on
+// (tenant, read, created_at) for fast unread counts.
+
+func (f *FileStore) notificationsPath() string {
+	return filepath.Join(f.homeDir, "notifications.json")
+}
+
+func (f *FileStore) loadNotifications() ([]NotificationRecord, error) {
+	data, err := os.ReadFile(f.notificationsPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var ns []NotificationRecord
+	if err := json.Unmarshal(data, &ns); err != nil {
+		return nil, err
+	}
+	return ns, nil
+}
+
+func (f *FileStore) saveNotifications(ns []NotificationRecord) error {
+	data, err := json.MarshalIndent(ns, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(f.notificationsPath(), data, 0o644)
+}
+
+func (f *FileStore) ListNotifications(ctx context.Context, tenantID string, filters NotificationFilters) ([]NotificationRecord, error) {
+	all, err := f.loadNotifications()
+	if err != nil {
+		return nil, err
+	}
+	// Newest first — the dashboard always wants reverse-chronological.
+	out := make([]NotificationRecord, 0, len(all))
+	for _, n := range all {
+		if filters.AgentID != "" && n.AgentID != filters.AgentID {
+			continue
+		}
+		if filters.Source != "" && n.Source != filters.Source {
+			continue
+		}
+		if filters.UnreadOnly && n.Read {
+			continue
+		}
+		out = append(out, n)
+	}
+	// Stable sort: newest first by CreatedAt.
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].CreatedAt.After(out[i].CreatedAt) {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	if filters.Offset > 0 {
+		if filters.Offset >= len(out) {
+			return nil, nil
+		}
+		out = out[filters.Offset:]
+	}
+	if filters.Limit > 0 && len(out) > filters.Limit {
+		out = out[:filters.Limit]
+	}
+	return out, nil
+}
+
+func (f *FileStore) CountUnreadNotifications(ctx context.Context, tenantID string) (int, error) {
+	all, err := f.loadNotifications()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, x := range all {
+		if !x.Read {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *FileStore) GetNotification(ctx context.Context, tenantID, id string) (*NotificationRecord, error) {
+	all, err := f.loadNotifications()
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].ID == id {
+			return &all[i], nil
+		}
+	}
+	return nil, fmt.Errorf("notification not found: %s", id)
+}
+
+func (f *FileStore) SaveNotification(ctx context.Context, tenantID string, n *NotificationRecord) error {
+	all, err := f.loadNotifications()
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range all {
+		if all[i].ID == n.ID {
+			all[i] = *n
+			found = true
+			break
+		}
+	}
+	if !found {
+		all = append(all, *n)
+	}
+	// Keep at most 1000 notifications per tenant in the file backend
+	// to bound the read-modify-write cost. Postgres backend keeps
+	// everything (and indexes properly).
+	const maxKeep = 1000
+	if len(all) > maxKeep {
+		// Trim oldest by CreatedAt
+		// Simple bubble: not many over the cap
+		for i := 0; i < len(all); i++ {
+			for j := i + 1; j < len(all); j++ {
+				if all[i].CreatedAt.After(all[j].CreatedAt) {
+					all[i], all[j] = all[j], all[i]
+				}
+			}
+		}
+		all = all[len(all)-maxKeep:]
+	}
+	return f.saveNotifications(all)
+}
+
+func (f *FileStore) MarkNotificationRead(ctx context.Context, tenantID, id string, read bool) error {
+	all, err := f.loadNotifications()
+	if err != nil {
+		return err
+	}
+	for i := range all {
+		if all[i].ID == id {
+			all[i].Read = read
+			return f.saveNotifications(all)
+		}
+	}
+	return fmt.Errorf("notification not found: %s", id)
+}
+
+func (f *FileStore) MarkAllNotificationsRead(ctx context.Context, tenantID string) error {
+	all, err := f.loadNotifications()
+	if err != nil {
+		return err
+	}
+	for i := range all {
+		all[i].Read = true
+	}
+	return f.saveNotifications(all)
+}
+
+func (f *FileStore) DeleteNotification(ctx context.Context, tenantID, id string) error {
+	all, err := f.loadNotifications()
+	if err != nil {
+		return err
+	}
+	for i := range all {
+		if all[i].ID == id {
+			all = append(all[:i], all[i+1:]...)
+			return f.saveNotifications(all)
+		}
+	}
+	return fmt.Errorf("notification not found: %s", id)
+}
+
 // --- Chat Tasks ---
 //
 // FileStore stores each task as a single JSON file under

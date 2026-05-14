@@ -163,10 +163,10 @@ func (s *Scheduler) processDueJobs(ctx context.Context) {
 			text = fmt.Sprintf("[Cron Job: %s] This is a scheduled task trigger.", j.Name)
 		}
 
-		// A blank channel means "deliver via the in-process web chat path"
-		// — we tag it as "web" so the gateway's bus subscriber can route
-		// it to the agent.HandleWebChat sink. Cron jobs created from the
-		// chat UI flow through this branch.
+		// A blank channel means "deliver in-process via the
+		// notifications subsystem" — we tag it as "web" so logs are
+		// readable, but routing relies on AgentID + Origin="cron"
+		// rather than channel binding.
 		ch := j.Channel
 		if ch == "" {
 			ch = "web"
@@ -177,6 +177,8 @@ func (s *Scheduler) processDueJobs(ctx context.Context) {
 			UserID:   "cron",
 			Text:     text,
 			PeerKind: "dm",
+			AgentID:  j.AgentID, // bypass binding match — cron knows its agent
+			Origin:   "cron",    // signals "deliver as Notification, not chat reply"
 		}
 
 		// Compute the actual next fire time from the job's schedule. The
@@ -398,12 +400,18 @@ func (s *Scheduler) fireJob(job Job) {
 		text = fmt.Sprintf("[Cron Job: %s] This is a scheduled task trigger.", job.Name)
 	}
 
+	ch := job.Channel
+	if ch == "" {
+		ch = "web"
+	}
 	s.bus.Inbound <- bus.InboundMessage{
-		Channel:  job.Channel,
+		Channel:  ch,
 		ChatID:   job.ChatID,
 		UserID:   "cron",
 		Text:     text,
 		PeerKind: "dm",
+		AgentID:  job.AgentID, // bypass binding match
+		Origin:   "cron",      // signals "deliver as Notification, not chat reply"
 	}
 }
 

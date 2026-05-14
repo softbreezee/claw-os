@@ -36,6 +36,24 @@ type InboundMessage struct {
 	PhotoURL     string       // legacy: single attached photo URL (Telegram). Prefer Attachments for new code.
 	Attachments  []Attachment // multimodal attachments (images today; pdf/audio later)
 	ReplyToMsgID string       // message ID being replied to
+
+	// AgentID, when non-empty, bypasses cfg.Bindings-based agent
+	// matching and routes the message directly to the named agent.
+	// Used by the cron scheduler (jobs carry their target agent in
+	// the store) and the webhook system. For real channel messages
+	// this stays empty and routing falls back to binding match.
+	AgentID string
+
+	// Origin tags the source of the inbound message so downstream
+	// routing can apply per-origin policy. Known values:
+	//   "" / "channel" — real IM/web user input (default)
+	//   "cron"          — emitted by internal/cron.Scheduler.fireJob
+	//   "webhook"       — emitted by internal/webhook on hook delivery
+	//   "internal"      — emitted by another agent / the gateway itself
+	// The reply path uses this to decide whether to send via
+	// outbound channel (real chat) vs. write a Notification record
+	// (cron / webhook / internal).
+	Origin string
 }
 
 // OutboundButton represents a button in an inline keyboard.

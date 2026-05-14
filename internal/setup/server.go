@@ -227,6 +227,15 @@ func (s *Server) Run(ctx context.Context) error {
 	// test a freshly-created job without waiting for the schedule.
 	mux.HandleFunc("POST /api/cron/{id}/run", s.handleRunCronJobNow)
 
+	// Notifications (the OS-level inbox). Sidebar polls /unread-count
+	// every few seconds for the badge; the inbox page hits /notifications
+	// to render the list.
+	mux.HandleFunc("GET /api/notifications", s.handleListNotifications)
+	mux.HandleFunc("GET /api/notifications/unread-count", s.handleUnreadNotificationCount)
+	mux.HandleFunc("PUT /api/notifications/{id}/read", s.handleMarkNotificationRead)
+	mux.HandleFunc("POST /api/notifications/read-all", s.handleMarkAllNotificationsRead)
+	mux.HandleFunc("DELETE /api/notifications/{id}", s.handleDeleteNotification)
+
 	// Apps (quick-launch external web tools)
 	mux.HandleFunc("GET /api/apps", s.handleListApps)
 	mux.HandleFunc("POST /api/apps", s.handleCreateApp)

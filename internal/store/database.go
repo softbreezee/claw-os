@@ -845,6 +845,161 @@ func nullableTime(t *time.Time) sql.NullTime {
 	return sql.NullTime{Time: *t, Valid: true}
 }
 
+// --- Notifications ---
+//
+// Single table, indexed for the two hot queries: "list newest 50" and
+// "count where read=false". Source/AgentID are optional filters.
+
+// MigrateNotifications creates the notifications table + its indexes.
+// Targeted migration following the same pattern as MigrateChatTasks
+// and MigrateCronJobs so the gateway can call it idempotently on
+// every startup without dragging in the legacy memory_logs migration
+// that requires SQLite-only AUTOINCREMENT.
+func (d *DBStore) MigrateNotifications(ctx context.Context) error {
+	for _, stmt := range d.notificationsMigrationSQL() {
+		if _, err := d.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrate notifications: %w\nSQL: %s", err, stmt)
+		}
+	}
+	return nil
+}
+
+func (d *DBStore) notificationsMigrationSQL() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS notifications (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT '',
+			source_id TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL DEFAULT '',
+			body TEXT NOT NULL DEFAULT '',
+			link TEXT NOT NULL DEFAULT '',
+			read BOOLEAN NOT NULL DEFAULT false,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_list ON notifications (tenant_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications (tenant_id, read, created_at DESC)`,
+	}
+}
+
+func (d *DBStore) ListNotifications(ctx context.Context, tenantID string, f NotificationFilters) ([]NotificationRecord, error) {
+	limit := f.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+
+	where := []string{fmt.Sprintf("tenant_id=%s", d.ph(1))}
+	args := []any{tenantID}
+	idx := 2
+	if f.AgentID != "" {
+		where = append(where, fmt.Sprintf("agent_id=%s", d.ph(idx)))
+		args = append(args, f.AgentID)
+		idx++
+	}
+	if f.Source != "" {
+		where = append(where, fmt.Sprintf("source=%s", d.ph(idx)))
+		args = append(args, f.Source)
+		idx++
+	}
+	if f.UnreadOnly {
+		// Booleans roundtrip natively for both pgx and modernc/sqlite.
+		where = append(where, fmt.Sprintf("read=%s", d.ph(idx)))
+		args = append(args, false)
+		idx++
+	}
+	limPlaceholder := d.ph(idx)
+	offPlaceholder := d.ph(idx + 1)
+	args = append(args, limit, f.Offset)
+
+	q := fmt.Sprintf(
+		`SELECT id, tenant_id, agent_id, source, source_id, title, body, link, read, created_at
+		 FROM notifications WHERE %s
+		 ORDER BY created_at DESC LIMIT %s OFFSET %s`,
+		strings.Join(where, " AND "), limPlaceholder, offPlaceholder)
+
+	rows, err := d.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []NotificationRecord
+	for rows.Next() {
+		var n NotificationRecord
+		if err := rows.Scan(&n.ID, &n.TenantID, &n.AgentID, &n.Source, &n.SourceID, &n.Title, &n.Body, &n.Link, &n.Read, &n.CreatedAt); err != nil {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+func (d *DBStore) CountUnreadNotifications(ctx context.Context, tenantID string) (int, error) {
+	q := fmt.Sprintf(`SELECT COUNT(*) FROM notifications WHERE tenant_id=%s AND read=%s`, d.ph(1), d.ph(2))
+	var n int
+	err := d.db.QueryRowContext(ctx, q, tenantID, false).Scan(&n)
+	return n, err
+}
+
+func (d *DBStore) GetNotification(ctx context.Context, tenantID, id string) (*NotificationRecord, error) {
+	q := fmt.Sprintf(
+		`SELECT id, tenant_id, agent_id, source, source_id, title, body, link, read, created_at
+		 FROM notifications WHERE tenant_id=%s AND id=%s`, d.ph(1), d.ph(2))
+	row := d.db.QueryRowContext(ctx, q, tenantID, id)
+	var n NotificationRecord
+	if err := row.Scan(&n.ID, &n.TenantID, &n.AgentID, &n.Source, &n.SourceID, &n.Title, &n.Body, &n.Link, &n.Read, &n.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &n, nil
+}
+
+func (d *DBStore) SaveNotification(ctx context.Context, tenantID string, n *NotificationRecord) error {
+	if n.CreatedAt.IsZero() {
+		n.CreatedAt = time.Now().UTC()
+	}
+	n.TenantID = tenantID
+	// Upsert: on PK conflict update everything except created_at.
+	if d.dialect == "postgres" {
+		_, err := d.db.ExecContext(ctx,
+			`INSERT INTO notifications (id, tenant_id, agent_id, source, source_id, title, body, link, read, created_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			 ON CONFLICT (id) DO UPDATE SET
+				 agent_id=EXCLUDED.agent_id,
+				 source=EXCLUDED.source,
+				 source_id=EXCLUDED.source_id,
+				 title=EXCLUDED.title,
+				 body=EXCLUDED.body,
+				 link=EXCLUDED.link,
+				 read=EXCLUDED.read`,
+			n.ID, tenantID, n.AgentID, n.Source, n.SourceID, n.Title, n.Body, n.Link, n.Read, n.CreatedAt)
+		return err
+	}
+	_, err := d.db.ExecContext(ctx,
+		`INSERT OR REPLACE INTO notifications (id, tenant_id, agent_id, source, source_id, title, body, link, read, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		n.ID, tenantID, n.AgentID, n.Source, n.SourceID, n.Title, n.Body, n.Link, n.Read, n.CreatedAt)
+	return err
+}
+
+func (d *DBStore) MarkNotificationRead(ctx context.Context, tenantID, id string, read bool) error {
+	q := fmt.Sprintf(`UPDATE notifications SET read=%s WHERE tenant_id=%s AND id=%s`, d.ph(1), d.ph(2), d.ph(3))
+	_, err := d.db.ExecContext(ctx, q, read, tenantID, id)
+	return err
+}
+
+func (d *DBStore) MarkAllNotificationsRead(ctx context.Context, tenantID string) error {
+	q := fmt.Sprintf(`UPDATE notifications SET read=%s WHERE tenant_id=%s`, d.ph(1), d.ph(2))
+	_, err := d.db.ExecContext(ctx, q, true, tenantID)
+	return err
+}
+
+func (d *DBStore) DeleteNotification(ctx context.Context, tenantID, id string) error {
+	q := fmt.Sprintf(`DELETE FROM notifications WHERE tenant_id=%s AND id=%s`, d.ph(1), d.ph(2))
+	_, err := d.db.ExecContext(ctx, q, tenantID, id)
+	return err
+}
+
 // Ensure DBStore implements Store.
 var _ Store = (*DBStore)(nil)
 

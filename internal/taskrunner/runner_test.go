@@ -121,6 +121,24 @@ func (m *memStore) LockCronJob(context.Context, string, string) (bool, error)   
 func (m *memStore) UpdateCronJobRun(context.Context, string, time.Time, time.Time) error {
 	return nil
 }
+
+// Notification API stubs — taskrunner tests don't exercise the inbox
+// path so all of these can be no-ops; they exist purely to satisfy
+// the store.Store interface contract.
+func (m *memStore) ListNotifications(context.Context, string, store.NotificationFilters) ([]store.NotificationRecord, error) {
+	return nil, nil
+}
+func (m *memStore) CountUnreadNotifications(context.Context, string) (int, error) { return 0, nil }
+func (m *memStore) GetNotification(context.Context, string, string) (*store.NotificationRecord, error) {
+	return nil, nil
+}
+func (m *memStore) SaveNotification(context.Context, string, *store.NotificationRecord) error {
+	return nil
+}
+func (m *memStore) MarkNotificationRead(context.Context, string, string, bool) error { return nil }
+func (m *memStore) MarkAllNotificationsRead(context.Context, string) error           { return nil }
+func (m *memStore) DeleteNotification(context.Context, string, string) error         { return nil }
+
 func (m *memStore) Close() error { return nil }
 
 // collectEvents drains a subscription into a slice. Returns when the
