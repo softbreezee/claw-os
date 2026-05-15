@@ -195,14 +195,14 @@ func (s *Scheduler) processDueJobs(ctx context.Context) {
 		// previous "now + 60s" placeholder caused jobs to refire every
 		// minute regardless of cron expression — fine for a smoke test,
 		// catastrophic in real use.
-		nextRun := computeNextRun(j.Type, j.Schedule, now)
+		nextRun := ComputeNextRun(j.Type, j.Schedule, now)
 		if err := s.store.UpdateCronJobRun(ctx, j.ID, now, nextRun); err != nil {
 			slog.Error("failed to update cron job run", "id", j.ID, "error", err)
 		}
 	}
 }
 
-// computeNextRun returns the next time a job of the given type+schedule
+// ComputeNextRun returns the next time a job of the given type+schedule
 // should fire after `from`. On any parse error it falls back to one hour
 // out, which is a safe-enough rate-limit to avoid hot-spinning if a user
 // somehow stored a malformed schedule.
@@ -213,7 +213,7 @@ func (s *Scheduler) processDueJobs(ctx context.Context) {
 //   - "exact" / "daily"        — HH:MM, fires once per day at that wall-clock time
 //   - "cron"                   — five-field cron expression (* and */N supported)
 //   - "once"                   — RFC3339 datetime; after firing nextRun is far future (year 9999)
-func computeNextRun(jobType, schedule string, from time.Time) time.Time {
+func ComputeNextRun(jobType, schedule string, from time.Time) time.Time {
 	const fallback = time.Hour
 	jobType = strings.ToLower(strings.TrimSpace(jobType))
 	schedule = strings.TrimSpace(schedule)
@@ -249,6 +249,7 @@ func computeNextRun(jobType, schedule string, from time.Time) time.Time {
 			return next
 		}
 	}
+	// keep the unexported alias so in-package callers compile unchanged
 
 	slog.Warn("cron: cannot parse schedule, falling back to +1h",
 		"type", jobType, "schedule", schedule)
@@ -383,11 +384,20 @@ func cronMatch(fields []string, t time.Time) bool {
 	return true
 }
 
-// fieldMatch checks if a value matches a cron field (* or */N or exact number).
+// fieldMatch checks if a value matches a single cron field.
+// Supported syntax (standard cron subset):
+//
+//	*        any value
+//	*/N      every N units  (e.g. */5 = every 5 minutes)
+//	A-B      inclusive range (e.g. 1-5 = Mon–Fri, 9-17 = office hours)
+//	A,B,C    explicit list   (e.g. 0,15,30,45)
+//	N        exact value
 func fieldMatch(field string, value int) bool {
 	if field == "*" {
 		return true
 	}
+
+	// */N  – step
 	if strings.HasPrefix(field, "*/") {
 		n, err := strconv.Atoi(field[2:])
 		if err != nil || n <= 0 {
@@ -395,6 +405,32 @@ func fieldMatch(field string, value int) bool {
 		}
 		return value%n == 0
 	}
+
+	// A-B  – inclusive range
+	if strings.Contains(field, "-") {
+		parts := strings.SplitN(field, "-", 2)
+		if len(parts) == 2 {
+			lo, err1 := strconv.Atoi(parts[0])
+			hi, err2 := strconv.Atoi(parts[1])
+			if err1 == nil && err2 == nil {
+				return value >= lo && value <= hi
+			}
+		}
+		return false
+	}
+
+	// A,B,C  – list
+	if strings.Contains(field, ",") {
+		for _, part := range strings.Split(field, ",") {
+			n, err := strconv.Atoi(strings.TrimSpace(part))
+			if err == nil && n == value {
+				return true
+			}
+		}
+		return false
+	}
+
+	// exact number
 	n, err := strconv.Atoi(field)
 	if err != nil {
 		return false

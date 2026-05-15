@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/softbreezee/claw-os/internal/cron"
 	"github.com/softbreezee/claw-os/internal/store"
 )
 
@@ -177,11 +178,9 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaul
 
 		id := generateUUID()
 		now := time.Now()
-		// NextRun=now means "fire on the scheduler's next poll cycle";
-		// after first fire the scheduler computes the proper next
-		// tick from the schedule. This means newly-created jobs may
-		// fire up to ~1 minute late, which we accept in exchange for
-		// not duplicating cron-expression parsing inside the tool.
+		// Compute the real first-fire time so the job doesn't
+		// immediately fire just because NextRun <= now.
+		firstRun := cron.ComputeNextRun(jobType, args.Schedule, now)
 		job := &store.CronJobRecord{
 			ID:        id,
 			TenantID:  tenantID,
@@ -195,7 +194,7 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, defaultChannel, defaul
 			AccountID: accountID,
 			Timezone:  "Local",
 			Enabled:   true,
-			NextRun:   &now,
+			NextRun:   &firstRun,
 			CreatedAt: now,
 		}
 

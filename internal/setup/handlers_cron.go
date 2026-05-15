@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/softbreezee/claw-os/internal/cron"
 	"github.com/softbreezee/claw-os/internal/store"
 )
 
@@ -97,6 +98,10 @@ func (s *Server) handleCreateCronJob(w http.ResponseWriter, r *http.Request) {
 		enabled = *req.Enabled
 	}
 	now := time.Now()
+	// Compute the real first-fire time from the schedule so the job
+	// doesn't fire immediately on creation (was: NextRun=now which
+	// the scheduler treats as "due right now").
+	firstRun := cron.ComputeNextRun(req.Type, req.Schedule, now)
 	rec := &store.CronJobRecord{
 		ID:        newCronJobID(),
 		TenantID:  s.cronTenantID,
@@ -110,7 +115,7 @@ func (s *Server) handleCreateCronJob(w http.ResponseWriter, r *http.Request) {
 		ChatID:    req.ChatID,
 		Timezone:  "Local",
 		Enabled:   enabled,
-		NextRun:   &now, // fire on next poll cycle; scheduler computes proper next tick after first run
+		NextRun:   &firstRun,
 		CreatedAt: now,
 	}
 	if err := s.cronStore.SaveCronJob(r.Context(), s.cronTenantID, rec); err != nil {
@@ -156,7 +161,10 @@ func (s *Server) handleUpdateCronJob(w http.ResponseWriter, r *http.Request) {
 		// NextRun so the scheduler picks it up on the next tick
 		// instead of immediately re-firing all the missed slots.
 		if *req.Enabled {
-			next := time.Now()
+			// Compute proper next-fire from the schedule rather than
+			// setting NextRun=now, which would trigger immediately on
+			// the next 60-second poll (same bug as create path).
+			next := cron.ComputeNextRun(rec.Type, rec.Schedule, time.Now())
 			rec.NextRun = &next
 		}
 	}
