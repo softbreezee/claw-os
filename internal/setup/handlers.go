@@ -419,6 +419,48 @@ type saveConfigRequest struct {
 	Port            int    `json:"port"`
 	AgentName       string `json:"agentName"`
 	Personality     string `json:"personality"`
+
+	// Storage backend (PR: onboard-pg). Empty / "file" → keep
+	// file-based defaults; "postgres" requires DSN. Onboard never
+	// surfaces sqlite to keep the wizard simple — power users edit
+	// pawnix.json by hand for SQLite.
+	StorageType string `json:"storageType,omitempty"` // "" | "file" | "postgres"
+	StorageDSN  string `json:"storageDsn,omitempty"`  // "postgres://user:pass@host:5432/db?sslmode=disable"
+}
+
+// resolveModelID returns the canonical "<providerKey>/<model>" string.
+//
+// Background: the onboard UI used to blindly prepend providerKey, which
+// produced absurd ids like "openrouter/openai/gpt-5" (three slashes)
+// when the user picked an aggregator whose own model ids already carry
+// a vendor prefix. Worse, testProvider was probing with the un-prefixed
+// "openai/gpt-5" so the test would pass and the saved config would fail
+// at runtime — see docs/onboarding-issues.md Bug-3.
+//
+// Rules:
+//   - empty model → return "" (caller should reject upstream)
+//   - model already starts with "<providerKey>/" → return as-is
+//   - model already contains "/" (vendor-prefixed for aggregators
+//     like OpenRouter) → return as-is
+//   - otherwise → prepend providerKey + "/"
+func resolveModelID(providerKey, model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ""
+	}
+	if providerKey != "" && strings.HasPrefix(model, providerKey+"/") {
+		return model
+	}
+	if strings.Contains(model, "/") {
+		// Aggregator-style id like "anthropic/claude-sonnet-4" — treat as
+		// already fully-qualified. The provider registry knows to route
+		// these via the provider whose APIBase matches.
+		return model
+	}
+	if providerKey == "" {
+		return model
+	}
+	return providerKey + "/" + model
 }
 
 func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
@@ -432,6 +474,10 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	agentID := strings.ToLower(strings.TrimSpace(req.AgentName))
 	agentID = strings.ReplaceAll(agentID, " ", "-")
 	agentID = strings.ReplaceAll(agentID, "_", "-")
+	if agentID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "agentName is required"})
+		return
+	}
 
 	// Determine provider key
 	providerKey := req.Provider
@@ -439,49 +485,144 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		providerKey = strings.ToLower(strings.TrimSpace(req.ProviderName))
 		providerKey = strings.ReplaceAll(providerKey, " ", "-")
 	}
-
-	// Build config
-	cfg := &config.Config{
-		Providers: map[string]config.ProviderConfig{
-			providerKey: {
-				APIKey:   req.APIKey,
-				APIBase:  req.APIBase,
-				APIType:  req.APIType,
-				AuthType: req.AuthType,
-			},
-		},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Model:             providerKey + "/" + req.Model,
-				MaxTokens:         8192,
-				Temperature:       0.7,
-				MaxToolIterations: 20,
-			},
-			List: []config.AgentEntry{
-				{ID: agentID},
-			},
-		},
-		Channels: map[string]config.ChannelConfig{},
-		Bindings: []config.Binding{},
+	if providerKey == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "provider is required"})
+		return
 	}
 
-	// Auto-generate a gateway auth token
-	cfg.Gateway = config.GatewayCfg{
-		Port: req.Port,
-		Auth: config.GatewayAuth{
-			Token: generateRandomToken(32),
-		},
+	// Resolve the canonical model id ONCE so pawnix.json and agent.json
+	// agree (Bug-4). The agent.json copy used to be the bare req.Model
+	// while pawnix.json carried "providerKey/req.Model"; the divergence
+	// caused silent fallbacks at runtime.
+	canonicalModel := resolveModelID(providerKey, req.Model)
+	if canonicalModel == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "model is required"})
+		return
 	}
 
+	// Validate storage choice early. We accept empty / "file" as
+	// "keep current"; "postgres" requires a non-empty DSN; anything
+	// else (sqlite, etc.) is rejected in onboard — power users edit
+	// pawnix.json directly for those.
+	storageType := strings.ToLower(strings.TrimSpace(req.StorageType))
+	switch storageType {
+	case "", "file":
+		// no-op; keep whatever the existing config has
+	case "postgres":
+		if strings.TrimSpace(req.StorageDSN) == "" {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{
+				"ok":    false,
+				"error": "postgres storage requires a DSN (postgres://user:pass@host:5432/dbname?sslmode=disable)",
+			})
+			return
+		}
+	default:
+		jsonResponse(w, http.StatusBadRequest, map[string]any{
+			"ok":    false,
+			"error": fmt.Sprintf("unsupported storageType %q (expected \"file\" or \"postgres\")", req.StorageType),
+		})
+		return
+	}
+
+	// Merge into existing config when present (Bug-9). The previous
+	// implementation built a fresh Config struct and clobbered the
+	// file, which meant a re-run of onboard wiped out PG settings,
+	// other agents, cron jobs, hooks etc. Preserve everything that
+	// onboard doesn't explicitly own.
+	cfg, loadErr := config.Load()
+	if loadErr != nil || cfg == nil {
+		cfg = &config.Config{}
+	}
+	if cfg.Providers == nil {
+		cfg.Providers = map[string]config.ProviderConfig{}
+	}
+	if cfg.Channels == nil {
+		cfg.Channels = map[string]config.ChannelConfig{}
+	}
+
+	// Provider: preserve the existing entry's model list when only
+	// the credentials changed.
+	prov := cfg.Providers[providerKey]
+	prov.APIKey = req.APIKey
+	prov.APIBase = req.APIBase
+	if req.APIType != "" {
+		prov.APIType = req.APIType
+	}
+	if req.AuthType != "" {
+		prov.AuthType = req.AuthType
+	}
+	cfg.Providers[providerKey] = prov
+
+	// Agent defaults: only overwrite the model + the slot the wizard
+	// owns. Keep maxTokens / temperature / maxToolIterations as-is
+	// when the user already tuned them.
+	cfg.Agents.Defaults.Model = canonicalModel
+	if cfg.Agents.Defaults.MaxTokens == 0 {
+		cfg.Agents.Defaults.MaxTokens = 8192
+	}
+	if cfg.Agents.Defaults.Temperature == 0 {
+		cfg.Agents.Defaults.Temperature = 0.7
+	}
+	if cfg.Agents.Defaults.MaxToolIterations == 0 {
+		cfg.Agents.Defaults.MaxToolIterations = 20
+	}
+
+	// Append the new agent if not already in the list — preserve any
+	// other agents the user may have authored.
+	hasAgent := false
+	for _, a := range cfg.Agents.List {
+		if a.ID == agentID {
+			hasAgent = true
+			break
+		}
+	}
+	if !hasAgent {
+		cfg.Agents.List = append(cfg.Agents.List, config.AgentEntry{ID: agentID})
+	}
+
+	// Gateway: keep existing token if any, only overwrite port + auto
+	// generate a token on first onboard.
+	if req.Port > 0 {
+		cfg.Gateway.Port = req.Port
+	}
+	if cfg.Gateway.Auth.Token == "" {
+		cfg.Gateway.Auth.Token = generateRandomToken(32)
+	}
+
+	// Telegram: only touch the channel when the user opted in. Leave
+	// other channels (slack, discord, ...) intact.
 	if req.TelegramEnabled && req.TelegramToken != "" {
 		cfg.Channels["telegram"] = config.ChannelConfig{
 			Enabled:  true,
 			BotToken: req.TelegramToken,
 		}
-		cfg.Bindings = append(cfg.Bindings, config.Binding{
-			AgentID: agentID,
-			Match:   config.Match{Channel: "telegram"},
-		})
+		// avoid duplicate bindings on re-run
+		hasBinding := false
+		for _, b := range cfg.Bindings {
+			if b.AgentID == agentID && b.Match.Channel == "telegram" {
+				hasBinding = true
+				break
+			}
+		}
+		if !hasBinding {
+			cfg.Bindings = append(cfg.Bindings, config.Binding{
+				AgentID: agentID,
+				Match:   config.Match{Channel: "telegram"},
+			})
+		}
+	}
+
+	// Storage: only update when the user explicitly selected a backend.
+	// "" / "file" means "leave whatever is there", which preserves
+	// existing PG / sqlite configs across onboard re-runs.
+	if storageType == "postgres" {
+		cfg.Storage = config.StorageCfg{
+			Type:        "postgres",
+			DSN:         strings.TrimSpace(req.StorageDSN),
+			AutoMigrate: true,
+		}
+	} else if storageType == "file" {
+		cfg.Storage = config.StorageCfg{Type: "file"}
 	}
 
 	// Ensure home dir exists
@@ -497,7 +638,11 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Write config
 	configPath := filepath.Join(homeDir, "pawnix.json")
-	data, _ := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
 	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -518,7 +663,7 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	// Write bootstrap files
 	bootstrapFiles := map[string]string{
 		"AGENTS.md":    "# Agent Capabilities\n\nDescribe what this agent can do.\n",
-		"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a Pawnix AI agent.\n", req.AgentName),  // use display name
+		"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a Pawnix AI agent.\n", req.AgentName), // use display name
 		"USER.md":      "# User\n\nInformation about the user you serve.\n",
 		"TOOLS.md":     "# Tools\n\nAdditional tool usage instructions.\n",
 		"BOOTSTRAP.md": "# Bootstrap\n\nStartup instructions loaded on every conversation.\n",
@@ -538,15 +683,20 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Write agent.json
-	agentCfg := config.AgentFileConfig{Model: req.Model}
+	// Write agent.json — same canonical model id as pawnix.json (Bug-4).
+	agentCfg := config.AgentFileConfig{Model: canonicalModel}
 	agentData, _ := json.MarshalIndent(agentCfg, "", "  ")
 	agentJSONPath := filepath.Join(agentDir, "agent.json")
 	if _, err := os.Stat(agentJSONPath); os.IsNotExist(err) {
 		os.WriteFile(agentJSONPath, agentData, 0o644)
 	}
 
-	slog.Info("config saved", "path", configPath, "agent", agentID)
+	slog.Info("config saved",
+		"path", configPath,
+		"agent", agentID,
+		"model", canonicalModel,
+		"storage", cfg.Storage.Type,
+	)
 
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
 

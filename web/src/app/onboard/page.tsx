@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -25,22 +24,93 @@ import { Textarea } from "@/components/ui/textarea";
 import { testProvider, saveConfig } from "@/lib/api";
 import { Logo } from "@/components/logo";
 
-const PROVIDERS: Record<string, { apiBase: string; apiType: string; models: string[] }> = {
+// Provider presets shown in the onboard wizard. Keep the model lists
+// in sync with internal/modelcatalog/modelcatalog.go — those entries
+// are the ones whose context windows / compaction thresholds Pawnix
+// actually knows about. Anything outside this list still works, but
+// won't get an accurate token budget out of the box.
+//
+// `apiType` decides the wire protocol used by the provider runtime
+// (see internal/provider/*.go). `authType` is informational today;
+// the runtime picks the auth header from `apiType`. We preserve it
+// in case future drivers branch on it.
+//
+// For aggregators like OpenRouter the model id is already
+// vendor-prefixed (e.g. "anthropic/claude-sonnet-4"); the backend's
+// resolveModelID() helper is aware of this and won't double-prefix.
+const PROVIDERS: Record<
+  string,
+  { label: string; apiBase: string; apiType: string; authType: string; models: string[] }
+> = {
+  deepseek: {
+    label: "DeepSeek",
+    apiBase: "https://api.deepseek.com/v1",
+    apiType: "openai-chat",
+    authType: "bearer-token",
+    models: ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-pro"],
+  },
+  openai: {
+    label: "OpenAI",
+    apiBase: "https://api.openai.com/v1",
+    apiType: "openai-chat",
+    authType: "bearer-token",
+    models: ["gpt-5", "gpt-4o", "gpt-4o-mini", "o3", "o3-mini", "o4-mini"],
+  },
+  anthropic: {
+    label: "Anthropic",
+    apiBase: "https://api.anthropic.com",
+    apiType: "anthropic-messages",
+    authType: "api-key",
+    models: ["claude-sonnet-4", "claude-opus-4", "claude-3-5-sonnet", "claude-3-5-haiku"],
+  },
   openrouter: {
+    label: "OpenRouter",
     apiBase: "https://openrouter.ai/api/v1",
     apiType: "openai-chat",
+    authType: "bearer-token",
+    // OpenRouter ids are already vendor/model-shaped — keep them as-is.
     models: [
-      "openai/gpt-5.4",
-      "anthropic/claude-sonnet-4.6",
-      "google/gemini-3.1-flash-lite-preview",
+      "anthropic/claude-sonnet-4",
+      "openai/gpt-5",
+      "google/gemini-2.5-pro",
+      "deepseek/deepseek-chat",
     ],
   },
+  google: {
+    label: "Google Gemini",
+    apiBase: "https://generativelanguage.googleapis.com/v1beta/openai",
+    apiType: "openai-chat",
+    authType: "bearer-token",
+    models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-pro", "gemini-2.0-flash"],
+  },
+  moonshot: {
+    label: "Moonshot (Kimi)",
+    apiBase: "https://api.moonshot.cn/v1",
+    apiType: "openai-chat",
+    authType: "bearer-token",
+    models: ["kimi-k2.5", "kimi-k2"],
+  },
+  qwen: {
+    label: "Qwen (DashScope)",
+    apiBase: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    apiType: "openai-chat",
+    authType: "bearer-token",
+    models: ["qwen-max", "qwen2.5-72b"],
+  },
   ollama: {
+    label: "Ollama (Local)",
     apiBase: "http://localhost:11434/v1",
     apiType: "openai-chat",
+    authType: "bearer-token",
     models: ["llama3", "mistral", "codellama"],
   },
-  custom: { apiBase: "", apiType: "openai-chat", models: [] },
+  custom: {
+    label: "Custom",
+    apiBase: "",
+    apiType: "openai-chat",
+    authType: "bearer-token",
+    models: [],
+  },
 };
 
 const API_TYPE_OPTIONS = [
@@ -52,6 +122,26 @@ const AUTH_TYPE_OPTIONS = [
   { value: "api-key", label: "API Key" },
   { value: "bearer-token", label: "Bearer Token" },
 ];
+
+// Storage backend options exposed in onboard. SQLite is intentionally
+// omitted to keep the wizard simple — power users can edit pawnix.json
+// directly. See docs/onboarding-issues.md (Phase 1 / storage entrypoint).
+const STORAGE_OPTIONS = [
+  { value: "file", label: "File (default, no DB)" },
+  { value: "postgres", label: "PostgreSQL" },
+];
+
+// Fields whose change should invalidate a prior "Connected" badge.
+// Editing any of these means the previous handshake no longer reflects
+// what we'd actually save.
+const TEST_INVALIDATING_KEYS = new Set([
+  "apiBase",
+  "apiKey",
+  "model",
+  "apiType",
+  "authType",
+  "provider",
+]);
 
 interface OnboardConfig {
   provider: string;
@@ -66,6 +156,10 @@ interface OnboardConfig {
   port: number;
   agentName: string;
   personality: string;
+  // Storage backend (added in Phase 1 of onboarding fix-up). Maps to
+  // saveConfigRequest.StorageType / StorageDSN on the backend.
+  storageType: string; // "file" | "postgres"
+  storageDsn: string;  // only used when storageType === "postgres"
 }
 
 const STEP_LABELS = [
@@ -116,22 +210,28 @@ function ConfettiEffect() {
 }
 
 export default function OnboardPage() {
-  const router = useRouter();
   const [step, setStep] = useState(0);
-  const [config, setConfig] = useState<OnboardConfig>({
-    provider: "openrouter",
-    providerName: "openrouter",
-    apiBase: "https://openrouter.ai/api/v1",
-    apiKey: "",
-    apiType: "openai-chat",
-    authType: "api-key",
-    model: "openai/gpt-5.4",
-    telegramEnabled: false,
-    telegramToken: "",
-    port: 18953,
-    agentName: "Pawnix",
-    personality:
-      "You are a helpful, friendly AI assistant. You respond concisely and accurately.",
+  const [config, setConfig] = useState<OnboardConfig>(() => {
+    // Default to DeepSeek — it's the cheapest mainstream provider with
+    // a sensible free tier, and was the headline gap before this fix.
+    const initial = PROVIDERS.deepseek;
+    return {
+      provider: "deepseek",
+      providerName: "deepseek",
+      apiBase: initial.apiBase,
+      apiKey: "",
+      apiType: initial.apiType,
+      authType: initial.authType,
+      model: initial.models[0] || "",
+      telegramEnabled: false,
+      telegramToken: "",
+      port: 18953,
+      agentName: "Pawnix",
+      personality:
+        "You are a helpful, friendly AI assistant. You respond concisely and accurately.",
+      storageType: "file",
+      storageDsn: "",
+    };
   });
   const [testStatus, setTestStatus] = useState<
     "idle" | "testing" | "success" | "error"
@@ -139,6 +239,8 @@ export default function OnboardPage() {
   const [testError, setTestError] = useState("");
   const [showConfetti, setShowConfetti] = useState(false);
   const [launched, setLaunched] = useState(false);
+  const [launchError, setLaunchError] = useState("");
+  const [launching, setLaunching] = useState(false);
   const [jsonExpanded, setJsonExpanded] = useState(false);
   const [mounted, setMounted] = useState(false);
 
@@ -146,11 +248,22 @@ export default function OnboardPage() {
     setMounted(true);
   }, []);
 
+  // updateConfig also invalidates the test-connection state when the
+  // user edits a field that affects the handshake. Without this, the
+  // green "Connected" badge would linger after editing the API Key,
+  // letting users proceed with an untested config (Bug-2).
   const updateConfig = useCallback(
     (updates: Partial<OnboardConfig>) => {
       setConfig((prev) => ({ ...prev, ...updates }));
+      const invalidates = Object.keys(updates).some((k) =>
+        TEST_INVALIDATING_KEYS.has(k),
+      );
+      if (invalidates) {
+        setTestStatus("idle");
+        setTestError("");
+      }
     },
-    []
+    [],
   );
 
   const handleProviderChange = useCallback(
@@ -162,11 +275,11 @@ export default function OnboardPage() {
         providerName: provider === "custom" ? "" : provider,
         apiBase: preset.apiBase,
         apiType: preset.apiType,
+        authType: preset.authType,
         model: preset.models[0] || "",
       });
-      setTestStatus("idle");
     },
-    [updateConfig]
+    [updateConfig],
   );
 
   const handleTestConnection = useCallback(async () => {
@@ -193,37 +306,72 @@ export default function OnboardPage() {
     }
   }, [config.apiBase, config.apiKey, config.model, config.apiType, config.authType]);
 
+  // handleLaunch sends the wizard payload to /api/save-config and
+  // honours the backend's {ok, error} contract. Previously a failure
+  // path swallowed the error and still threw confetti, which made
+  // users think onboarding succeeded while pawnix.json was either
+  // missing or invalid (Bug-7).
   const handleLaunch = useCallback(async () => {
+    setLaunching(true);
+    setLaunchError("");
     try {
-      await saveConfig(config as unknown as Record<string, unknown>);
+      const result = (await saveConfig(
+        config as unknown as Record<string, unknown>,
+      )) as { ok?: boolean; error?: string };
+      if (!result || !result.ok) {
+        setLaunchError(result?.error || "Failed to save configuration");
+        setLaunching(false);
+        return;
+      }
       setShowConfetti(true);
       setLaunched(true);
       setTimeout(() => setShowConfetti(false), 4000);
       setTimeout(() => {
+        // Use the same hostname the user is browsing onboard from,
+        // so a remote install doesn't try to redirect them to their
+        // own localhost (Bug-8).
+        const host = window.location.hostname || "localhost";
         const port = config.port || window.location.port;
-        window.location.href = `http://localhost:${port}/chat/`;
+        const proto = window.location.protocol || "http:";
+        window.location.href = `${proto}//${host}:${port}/chat/`;
       }, 3000);
-    } catch {
-      setLaunched(true);
-      setShowConfetti(true);
-      setTimeout(() => setShowConfetti(false), 4000);
+    } catch (err) {
+      setLaunchError(
+        err instanceof Error
+          ? err.message
+          : "Could not reach the setup server. Is it still running?",
+      );
+      setLaunching(false);
     }
-  }, [config, router]);
+  }, [config]);
 
   const canProceed = useCallback(() => {
     switch (step) {
       case 0:
         return true;
       case 1:
-        return config.apiBase.length > 0 && config.model.length > 0;
-      case 2:
-        return config.agentName.length > 0 && config.port > 0;
+        // Require a green test before allowing the user to advance —
+        // the wizard previously let unverified configs through and the
+        // first agent call would fail at runtime (Bug-1).
+        return (
+          config.apiBase.length > 0 &&
+          config.model.length > 0 &&
+          testStatus === "success"
+        );
+      case 2: {
+        if (!(config.agentName.length > 0 && config.port > 0)) return false;
+        // Postgres requires a DSN before we'll let the wizard advance.
+        if (config.storageType === "postgres" && !config.storageDsn.trim()) {
+          return false;
+        }
+        return true;
+      }
       case 3:
         return true;
       default:
         return false;
     }
-  }, [step, config]);
+  }, [step, config, testStatus]);
 
   if (!mounted) return null;
 
@@ -345,9 +493,9 @@ export default function OnboardPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.keys(PROVIDERS).map((p) => (
-                      <SelectItem key={p} value={p}>
-                        <span className="capitalize">{p}</span>
+                    {Object.entries(PROVIDERS).map(([key, p]) => (
+                      <SelectItem key={key} value={key}>
+                        {p.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -506,9 +654,14 @@ export default function OnboardPage() {
                       Connected
                     </Badge>
                   )}
+                  {testStatus === "idle" && (
+                    <span className="text-xs text-muted-foreground">
+                      Required before continuing
+                    </span>
+                  )}
                 </div>
                 {testStatus === "error" && (
-                  <p className="text-sm text-destructive break-all">
+                  <p className="text-sm text-destructive whitespace-pre-wrap break-all">
                     {testError || "Connection failed"}
                   </p>
                 )}
@@ -528,7 +681,7 @@ export default function OnboardPage() {
             <CardHeader>
               <CardTitle className="text-xl">Gateway Settings</CardTitle>
               <CardDescription>
-                Configure your agent identity and server settings.
+                Configure your agent identity, server port, and storage backend.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
@@ -554,6 +707,51 @@ export default function OnboardPage() {
                   className="font-mono"
                 />
               </div>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <Label>Storage Backend</Label>
+                <Select
+                  value={config.storageType}
+                  onValueChange={(v) => v && updateConfig({ storageType: v })}
+                >
+                  <SelectTrigger className="w-full text-sm">
+                    <SelectValue>
+                      {STORAGE_OPTIONS.find((o) => o.value === config.storageType)?.label}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STORAGE_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {config.storageType === "postgres"
+                    ? "Sessions, memory, and agent state will live in PostgreSQL. Filesystem stays as cold storage."
+                    : "Sessions, memory, and agent state are kept under ~/.pawnix as JSON files."}
+                </p>
+              </div>
+
+              {config.storageType === "postgres" && (
+                <div className="space-y-2">
+                  <Label>PostgreSQL DSN</Label>
+                  <Input
+                    value={config.storageDsn}
+                    onChange={(e) => updateConfig({ storageDsn: e.target.value })}
+                    placeholder="postgres://user:pass@localhost:5432/pawnix?sslmode=disable"
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Pawnix will auto-migrate the schema on first launch.
+                  </p>
+                </div>
+              )}
+
+              <Separator />
 
               <div className="space-y-2">
                 <Label>
@@ -625,8 +823,7 @@ export default function OnboardPage() {
                   <div className="space-y-3">
                     <SummaryRow
                       label="Provider"
-                      value={config.provider}
-                      capitalize
+                      value={PROVIDERS[config.provider]?.label || config.provider}
                     />
                     <SummaryRow label="Model" value={config.model} mono />
                     <SummaryRow label="API Base" value={config.apiBase} mono />
@@ -641,6 +838,21 @@ export default function OnboardPage() {
                       value={String(config.port)}
                       mono
                     />
+                    <SummaryRow
+                      label="Storage"
+                      value={
+                        config.storageType === "postgres"
+                          ? "PostgreSQL"
+                          : "File (~/.pawnix)"
+                      }
+                    />
+                    {config.storageType === "postgres" && (
+                      <SummaryRow
+                        label="DSN"
+                        value={config.storageDsn || "Not set"}
+                        mono
+                      />
+                    )}
                   </div>
 
                   <button
@@ -668,12 +880,19 @@ export default function OnboardPage() {
                     </pre>
                   )}
 
+                  {launchError && (
+                    <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive whitespace-pre-wrap break-all">
+                      {launchError}
+                    </div>
+                  )}
+
                   <Button
                     onClick={handleLaunch}
-                    className="w-full bg-gradient-to-r from-violet-600 to-cyan-600 text-white hover:from-violet-700 hover:to-cyan-700 transition-all"
+                    disabled={launching}
+                    className="w-full bg-gradient-to-r from-violet-600 to-cyan-600 text-white hover:from-violet-700 hover:to-cyan-700 transition-all disabled:opacity-60"
                     size="lg"
                   >
-                    Launch Pawnix
+                    {launching ? "Launching..." : "Launch Pawnix"}
                     <svg
                       className="ml-2 h-4 w-4"
                       fill="none"
@@ -721,10 +940,10 @@ function SummaryRow({
   capitalize?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between">
-      <span className="text-sm text-muted-foreground">{label}</span>
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-sm text-muted-foreground shrink-0">{label}</span>
       <span
-        className={`text-sm ${mono ? "font-mono" : ""} ${capitalize ? "capitalize" : ""}`}
+        className={`text-sm text-right break-all ${mono ? "font-mono" : ""} ${capitalize ? "capitalize" : ""}`}
       >
         {value}
       </span>
