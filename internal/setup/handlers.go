@@ -428,39 +428,58 @@ type saveConfigRequest struct {
 	StorageDSN  string `json:"storageDsn,omitempty"`  // "postgres://user:pass@host:5432/db?sslmode=disable"
 }
 
-// resolveModelID returns the canonical "<providerKey>/<model>" string.
+// resolveModelID returns the canonical "<providerKey>/<rest>" string
+// used by Pawnix's runtime convention.
 //
-// Background: the onboard UI used to blindly prepend providerKey, which
-// produced absurd ids like "openrouter/openai/gpt-5" (three slashes)
-// when the user picked an aggregator whose own model ids already carry
-// a vendor prefix. Worse, testProvider was probing with the un-prefixed
-// "openai/gpt-5" so the test would pass and the saved config would fail
-// at runtime — see docs/onboarding-issues.md Bug-3.
+// The runtime registry (internal/provider/registry.go: Registry.For)
+// always splits on the FIRST "/" to find the provider, then calls
+// StripProviderPrefix to forward the remainder upstream. So for
+// aggregators like OpenRouter the canonical id IS three segments:
 //
-// Rules:
-//   - empty model → return "" (caller should reject upstream)
-//   - model already starts with "<providerKey>/" → return as-is
-//   - model already contains "/" (vendor-prefixed for aggregators
-//     like OpenRouter) → return as-is
-//   - otherwise → prepend providerKey + "/"
+//	openrouter/anthropic/claude-sonnet-4
+//	  └ providerKey └ what OpenRouter wants in the request
+//
+// The earlier "Bug-3 fix" that returned aggregator ids unchanged
+// (two segments) actually broke routing — the registry would try
+// to find a provider named "anthropic" and fall back to default.
+// We rewind to "always prefix providerKey" but keep the empty-input
+// guards.
+//
+// rawModel is what the user typed in the wizard (e.g. "deepseek-chat"
+// for direct providers, "anthropic/claude-sonnet-4" for OpenRouter).
+// providerKey is the directory entry in cfg.Providers.
+//
+// Idempotency: if the caller passes a string that is already prefixed
+// with "<providerKey>/" we don't double it.
 func resolveModelID(providerKey, model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return ""
 	}
-	if providerKey != "" && strings.HasPrefix(model, providerKey+"/") {
-		return model
-	}
-	if strings.Contains(model, "/") {
-		// Aggregator-style id like "anthropic/claude-sonnet-4" — treat as
-		// already fully-qualified. The provider registry knows to route
-		// these via the provider whose APIBase matches.
-		return model
-	}
 	if providerKey == "" {
 		return model
 	}
+	if strings.HasPrefix(model, providerKey+"/") {
+		return model
+	}
 	return providerKey + "/" + model
+}
+
+// rawModelID strips any leading "<providerKey>/" from a canonical model
+// id, returning the form that should live in the provider's Models
+// array (and that gets sent upstream after StripProviderPrefix).
+//
+// Examples (providerKey=openrouter):
+//
+//	openrouter/anthropic/claude-sonnet-4 → anthropic/claude-sonnet-4
+//	deepseek/deepseek-chat               → deepseek-chat (when providerKey=deepseek)
+//	deepseek-chat                        → deepseek-chat
+func rawModelID(providerKey, canonical string) string {
+	canonical = strings.TrimSpace(canonical)
+	if providerKey != "" && strings.HasPrefix(canonical, providerKey+"/") {
+		return canonical[len(providerKey)+1:]
+	}
+	return canonical
 }
 
 func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
@@ -541,7 +560,10 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Provider: preserve the existing entry's model list when only
-	// the credentials changed.
+	// the credentials changed, but make sure the chosen model is in
+	// the list — otherwise the Models page renders "No models
+	// available yet" because it iterates provider.Models, not
+	// agents.defaults.model.
 	prov := cfg.Providers[providerKey]
 	prov.APIKey = req.APIKey
 	prov.APIBase = req.APIBase
@@ -550,6 +572,27 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AuthType != "" {
 		prov.AuthType = req.AuthType
+	}
+
+	// Seed Models[] with the chosen model so the Models UI is
+	// non-empty out of the box. Use the "raw" form (without the
+	// providerKey/ prefix) because the Models UI re-prefixes when
+	// building dropdown values.
+	chosenRaw := rawModelID(providerKey, canonicalModel)
+	if chosenRaw != "" {
+		alreadyListed := false
+		for _, m := range prov.Models {
+			if m.ID == chosenRaw {
+				alreadyListed = true
+				break
+			}
+		}
+		if !alreadyListed {
+			prov.Models = append(prov.Models, config.ModelEntry{
+				ID:   chosenRaw,
+				Name: chosenRaw,
+			})
+		}
 	}
 	cfg.Providers[providerKey] = prov
 
