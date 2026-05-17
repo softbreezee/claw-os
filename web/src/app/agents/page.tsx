@@ -42,38 +42,36 @@ interface ModelGroup {
   models: string[];
 }
 
-/**
- * Combobox: input box + dropdown of models pulled live from the user's
- * configured providers (Models page).
- *
- * Why a combobox and not a plain Select?
- *   - Users sometimes want to pin an agent to a model that isn't yet in
- *     their provider config (e.g. they're about to add it). The free-form
- *     input lets them type any value, which is sent to the LLM API as-is.
- *
- * The previous implementation used a hard-coded SUGGESTED_MODELS list,
- * which meant the dropdown was disconnected from what the user actually
- * configured on the Models page. Fixed by accepting `groups` as a prop
- * sourced from getConfig().providers.
- */
 function ModelCombobox({
   value,
   onChange,
   groups,
+  autoFocus = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   groups: ModelGroup[];
+  autoFocus?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [inputVal, setInputVal] = useState(value);
-  // Track whether the user is actively typing — only then do we filter
-  // the dropdown by inputVal. Otherwise selecting a model and re-opening
-  // the dropdown would only show that single model (the original bug).
   const [isTyping, setIsTyping] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { setInputVal(value); }, [value]);
+
+  // Auto-focus and open dropdown when autoFocus is set (e.g. dialog just opened)
+  useEffect(() => {
+    if (autoFocus && inputRef.current) {
+      // Small delay so the dialog animation finishes first
+      const t = setTimeout(() => {
+        inputRef.current?.focus();
+        setOpen(true);
+      }, 150);
+      return () => clearTimeout(t);
+    }
+  }, [autoFocus]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -114,6 +112,7 @@ function ModelCombobox({
     <div ref={ref} className="relative">
       <div className="relative">
         <Input
+          ref={inputRef}
           value={inputVal}
           onChange={(e) => handleInput(e.target.value)}
           onFocus={() => { setOpen(true); setIsTyping(false); }}
@@ -183,9 +182,6 @@ export default function AgentsPage() {
   const [saving, setSaving] = useState(false);
   const [restarting, setRestarting] = useState(false);
 
-  // Live model groups from the user's configured providers (Models page).
-  // Each provider becomes a group; entries are emitted as `${name}/${id}`
-  // to mirror the Default Model selector convention.
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
 
   const [newName, setNewName] = useState("");
@@ -203,9 +199,6 @@ export default function AgentsPage() {
       .finally(() => setLoading(false));
   };
 
-  // Pull provider/model config and project it into combobox groups.
-  // Re-run when dialogs open so newly added models show up without
-  // requiring a full page refresh.
   const fetchModelOptions = () => {
     getConfig()
       .then((cfg) => {
@@ -221,8 +214,6 @@ export default function AgentsPage() {
         }
         setModelGroups(groups);
 
-        // Seed newModel with the first available option so the create
-        // dialog is usable out of the box.
         setNewModel((prev) => {
           if (prev) return prev;
           if (groups.length > 0 && groups[0].models.length > 0) {
@@ -239,8 +230,6 @@ export default function AgentsPage() {
     fetchModelOptions();
   }, []);
 
-  // Refresh model options whenever a dialog opens — user may have
-  // visited the Models page in another tab to add new models.
   useEffect(() => {
     if (createOpen || editOpen) fetchModelOptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -252,12 +241,10 @@ export default function AgentsPage() {
     await createAgent({ id: newName.trim(), model: newModel, soul: newSoul });
     setCreateOpen(false);
     setNewName("");
-    // Reset to first available model after creation
     setNewModel(modelGroups[0]?.models[0] || "");
     setNewSoul("");
     setSaving(false);
 
-    // Restart daemon so the new agent is loaded, then refresh the list
     setRestarting(true);
     await restartDaemon();
     await waitForGateway(15000);
@@ -434,7 +421,7 @@ export default function AgentsPage() {
             </div>
             <div className="space-y-2">
               <Label>Model</Label>
-              <ModelCombobox value={newModel} onChange={setNewModel} groups={modelGroups} />
+              <ModelCombobox value={newModel} onChange={setNewModel} groups={modelGroups} autoFocus />
             </div>
             <div className="space-y-2">
               <Label>Personality (SOUL.md)</Label>
@@ -466,8 +453,8 @@ export default function AgentsPage() {
 
       {/* Edit Dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <Bot className="h-5 w-5 text-primary" />
               {editAgent?.id}
@@ -476,7 +463,7 @@ export default function AgentsPage() {
               Edit agent configuration
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="space-y-4 py-2 overflow-y-auto flex-1 min-h-0">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Model</Label>
@@ -498,11 +485,11 @@ export default function AgentsPage() {
                 onChange={(e) => setEditSoul(e.target.value)}
                 placeholder="Your personality and behavioral guidelines..."
                 rows={8}
-                className="resize-none font-mono text-sm min-h-[200px]"
+                className="resize-none font-moto text-sm min-h-[200px]"
               />
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button
               variant="outline"
               onClick={() => setEditOpen(false)}
