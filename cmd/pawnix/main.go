@@ -55,6 +55,7 @@ func main() {
 	rootCmd.AddCommand(policyCmd())
 	rootCmd.AddCommand(daemonCmd())
 	rootCmd.AddCommand(migrateCmd())
+	rootCmd.AddCommand(mcpReasonixCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

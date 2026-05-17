@@ -198,6 +198,12 @@ func (s *Server) Run(ctx context.Context) error {
 	// Daemon control
 	mux.HandleFunc("POST /api/daemon/restart", s.handleDaemonRestart)
 
+	// MCP servers
+	mux.HandleFunc("GET /api/mcp", s.handleListMCPServers)
+	mux.HandleFunc("POST /api/mcp", s.handleCreateMCPServer)
+	mux.HandleFunc("PUT /api/mcp/{name}", s.handleUpdateMCPServer)
+	mux.HandleFunc("DELETE /api/mcp/{name}", s.handleDeleteMCPServer)
+
 	// Skills
 	mux.HandleFunc("GET /api/skills", s.handleListSkills)
 	mux.HandleFunc("GET /api/skills/{name}", s.handleGetSkill)

@@ -841,3 +841,45 @@ export async function reloadModelCatalog(): Promise<{ ok: boolean; message?: str
   });
   return res.json();
 }
+
+// ── MCP Servers ──
+
+export interface McpServerInfo {
+  name: string;
+  type: string;   // "stdio" | "http"
+  url?: string;
+  command?: string;
+  args?: string[];
+  status: string; // "connected" | "disconnected" | "unknown"
+  toolCount?: number;
+}
+
+export async function getMcpServers(): Promise<McpServerInfo[]> {
+  const res = await fetch("/api/mcp");
+  return res.json();
+}
+
+export async function createMcpServer(data: Record<string, unknown>): Promise<{ ok: boolean; name?: string; error?: string }> {
+  const res = await fetch("/api/mcp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function updateMcpServer(name: string, data: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`/api/mcp/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function deleteMcpServer(name: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`/api/mcp/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
