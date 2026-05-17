@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Cable, Plus, Trash2, Wrench } from "lucide-react";
+import { Cable, Plus, Trash2 } from "lucide-react";
 import {
   getMcpServers,
   createMcpServer,
@@ -52,10 +52,10 @@ export default function McpPage() {
     args: string;
     url: string;
   }>({
-    name: "reasonix",
+    name: "",
     type: "stdio",
-    command: "pawnix",
-    args: "mcp-reasonix",
+    command: "",
+    args: "",
     url: "",
   });
 
@@ -121,7 +121,6 @@ export default function McpPage() {
           </h2>
           <p className="text-sm text-muted-foreground mt-1">
             Model Context Protocol servers extend agents with external tools.
-            The <strong>Reasonix</strong> server provides platform self-healing diagnostics.
           </p>
         </div>
         <Button onClick={() => setShowAdd(true)}>
@@ -236,11 +235,6 @@ export default function McpPage() {
             <Plus className="h-4 w-4 mr-2" />
             Add your first MCP server
           </Button>
-          <p className="text-xs text-muted-foreground/60 mt-3 max-w-md mx-auto">
-            Try the <strong>Reasonix</strong> MCP server (name: reasonix, type:
-            stdio, command: pawnix, args: mcp-reasonix) to give your agents
-            platform diagnostic and self-healing tools.
-          </p>
         </div>
       ) : (
         <div className="rounded-lg border">
@@ -280,14 +274,7 @@ export default function McpPage() {
                     {srv.type === "stdio"
                       ? `${srv.command || "—"} ${(srv.args || []).join(" ")}`
                       : srv.url || "—"}
-                    {srv.name === "reasonix" && (
-                      <span
-                        className="ml-2 inline-flex items-center gap-1 text-xs text-violet-600 dark:text-violet-400"
-                        title="Reasonix provides platform self-healing tools"
-                      >
-                        <Wrench className="h-3 w-3" />
-                      </span>
-                    )}
+  
                   </TableCell>
                   <TableCell>
                     <Button
