@@ -13,6 +13,19 @@ import (
 
 // --- Agent Management ---
 
+// agentWorkspaceFiles is the ordered list of workspace files exposed
+// through the /api/agents GET and PUT endpoints. The UI renders them
+// as tabs so users can inspect and edit each file individually.
+// HISTORY.md is included as read-only (the frontend should disable
+// editing for it, and the PUT handler skips it).
+var agentWorkspaceFiles = []string{
+	"SOUL.md",
+	"MEMORY.md",
+	"USER.md",
+	"AGENTS.md",
+	"HISTORY.md",
+}
+
 // normalizeModel ensures every model name carries an explicit
 // "<provider>/" prefix, matching the multi-provider routing convention.
 // Models stored from before the registry refactor (or typed without
@@ -75,11 +88,16 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	resolved := config.ResolveAgents(cfg)
 	var agents []map[string]any
 	for _, ra := range resolved {
-		soul := ""
-		soulPath := filepath.Join(ra.Workspace, "SOUL.md")
-		if data, readErr := os.ReadFile(soulPath); readErr == nil {
-			soul = string(data)
+		// Read all workspace files into a map so the UI can display and
+		// edit each one individually.
+		files := map[string]string{}
+		for _, name := range agentWorkspaceFiles {
+			if data, readErr := os.ReadFile(filepath.Join(ra.Workspace, name)); readErr == nil {
+				files[name] = string(data)
+			}
 		}
+		// Keep the legacy top-level `soul` field for backwards compat.
+		soul := files["SOUL.md"]
 		agents = append(agents, map[string]any{
 			"id":                ra.ID,
 			"model":             normalizeModel(ra.Model, cfg),
@@ -89,6 +107,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			"maxToolIterations": ra.MaxToolIterations,
 			"thinking":          ra.Thinking,
 			"soul":              soul,
+			"files":             files,
 		})
 	}
 	if agents == nil {
@@ -153,8 +172,9 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {
-		Model string `json:"model"`
-		Soul  string `json:"soul"`
+		Model string            `json:"model"`
+		Soul  string            `json:"soul"`
+		Files map[string]string `json:"files"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid request"})
@@ -194,11 +214,34 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update workspace files
+	// Update workspace files.
+	// Build allowlist for safety — only files in agentWorkspaceFiles may be
+	// written, and HISTORY.md is always skipped (it is append-only by the
+	// agent runtime).
+	allowedFiles := map[string]bool{}
+	for _, name := range agentWorkspaceFiles {
+		if name != "HISTORY.md" {
+			allowedFiles[name] = true
+		}
+	}
+
 	homeDir, _ := config.HomeDir()
 	agentDir := filepath.Join(homeDir, "agents", id, "agent")
+
+	// Write files submitted via the new `files` map.
+	for name, content := range req.Files {
+		if !allowedFiles[name] {
+			continue // silently ignore unknown / protected files
+		}
+		os.WriteFile(filepath.Join(agentDir, name), []byte(content), 0o644)
+	}
+
+	// Legacy single-field paths — still honoured so the Create dialog
+	// (which only sends `soul`) keeps working without changes.
 	if req.Soul != "" {
-		os.WriteFile(filepath.Join(agentDir, "SOUL.md"), []byte(req.Soul), 0o644)
+		if _, alreadyWritten := req.Files["SOUL.md"]; !alreadyWritten {
+			os.WriteFile(filepath.Join(agentDir, "SOUL.md"), []byte(req.Soul), 0o644)
+		}
 	}
 	if req.Model != "" {
 		agentCfg := config.AgentFileConfig{Model: req.Model}

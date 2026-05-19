@@ -24,7 +24,12 @@ type Manager struct {
 // single pawnix instance can mix multiple LLM backends without
 // the awkward "every agent shares the same provider" hack the older
 // signature forced.
-func NewManager(resolved []config.ResolvedAgent, registry *provider.Registry, mb *bus.MessageBus) (*Manager, error) {
+//
+// fullCfg is the complete Config so each agent can pick up memory,
+// privacy, skills-learner and other cross-cutting settings that live
+// outside the per-agent ResolvedAgent struct. When non-nil we use
+// NewAgentWithFullCfg; when nil we fall back to NewAgent (tests).
+func NewManager(resolved []config.ResolvedAgent, registry *provider.Registry, mb *bus.MessageBus, fullCfg ...*config.Config) (*Manager, error) {
 	m := &Manager{
 		agents:   make(map[string]*Agent),
 		registry: registry,
@@ -35,9 +40,21 @@ func NewManager(resolved []config.ResolvedAgent, registry *provider.Registry, mb
 		return nil, err
 	}
 
+	// Extract optional full config (variadic keeps existing callers
+	// compiling without changes).
+	var cfg *config.Config
+	if len(fullCfg) > 0 {
+		cfg = fullCfg[0]
+	}
+
 	for _, rc := range resolved {
 		prov := registry.For(rc.Model)
-		ag := NewAgent(rc, prov, mb, homeDir)
+		var ag *Agent
+		if cfg != nil {
+			ag = NewAgentWithFullCfg(rc, prov, mb, homeDir, cfg)
+		} else {
+			ag = NewAgent(rc, prov, mb, homeDir)
+		}
 		// Hand the agent the shared registry so per-call model
 		// overrides (chat-UI picker) can re-route to the matching
 		// upstream instead of being pinned to the agent's bound

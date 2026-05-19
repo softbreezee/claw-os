@@ -2,8 +2,16 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"strings"
 )
+
+// ErrEmbeddingNotSupported is returned by providers that do not implement
+// an embedding endpoint (e.g. Anthropic Messages API). Callers should
+// treat this as "embedding unavailable, fall back to nil" — never propagate
+// as a hard failure, otherwise an Anthropic-only deployment would block
+// memory persistence entirely.
+var ErrEmbeddingNotSupported = errors.New("provider: embedding not supported")
 
 // Message represents a chat message.
 type Message struct {
@@ -105,9 +113,17 @@ func (r *StreamReader) SetErr(err error) {
 }
 
 // Provider is the LLM provider interface.
+//
+// Embed turns a piece of text into a fixed-length vector for semantic
+// memory search. The dimensionality is determined by the configured
+// embedding model (OpenAI text-embedding-3-small = 1536). Providers that
+// don't speak embeddings (Anthropic) return ErrEmbeddingNotSupported;
+// callers are expected to degrade gracefully (persist memory with
+// embedding=nil, fall back to keyword/recency search at read time).
 type Provider interface {
 	Chat(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64) (*Response, error)
 	ChatStream(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64) (*StreamReader, error)
+	Embed(ctx context.Context, text string, model string) ([]float32, error)
 }
 
 // StripProviderPrefix removes the "provider/" prefix from a model string.

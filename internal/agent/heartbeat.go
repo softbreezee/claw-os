@@ -2,11 +2,7 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/softbreezee/claw-os/internal/bus"
@@ -62,44 +58,11 @@ func (hb *Heartbeat) Start(ctx context.Context) {
 	}
 }
 
-func (hb *Heartbeat) tick(ctx context.Context) {
+func (hb *Heartbeat) tick(_ context.Context) {
 	slog.Info("heartbeat tick", "agent", hb.agent.Name())
 
-	// 1. Check HEARTBEAT.md for tasks
-	tasks := hb.loadHeartbeatTasks()
-	if tasks != "" {
-		now := time.Now()
-		heartbeatMsg := fmt.Sprintf(
-			"[Heartbeat — %s]\nCurrent tasks from HEARTBEAT.md:\n%s\n\nReview these tasks and take action on any that need attention based on the current date/time.",
-			now.Format("2006-01-02 15:04:05"),
-			tasks,
-		)
-
-		// Feed as an inbound message through the bus
-		hb.bus.Inbound <- bus.InboundMessage{
-			Channel:  "heartbeat",
-			ChatID:   "heartbeat_" + hb.agent.Name(),
-			UserID:   "system",
-			Text:     heartbeatMsg,
-			PeerKind: "dm",
-		}
-	}
-
-	// 2. Trigger memory update
+	// Trigger memory consolidation from recent HISTORY.md entries.
 	hb.updateMemory()
-}
-
-func (hb *Heartbeat) loadHeartbeatTasks() string {
-	path := filepath.Join(hb.agent.workspace(), "HEARTBEAT.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	content := strings.TrimSpace(string(data))
-	if content == "" {
-		return ""
-	}
-	return content
 }
 
 func (hb *Heartbeat) updateMemory() {

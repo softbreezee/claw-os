@@ -66,6 +66,8 @@ export interface AgentDetail {
   soul?: string;
   skills?: string[];
   tools?: string[];
+  /** All workspace files keyed by filename, e.g. "SOUL.md" → content. */
+  files?: Record<string, string>;
 }
 
 export interface SkillInfo {

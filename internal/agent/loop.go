@@ -162,6 +162,17 @@ func NewAgentWithFullCfg(rc config.ResolvedAgent, prov provider.Provider, mb *bu
 	if ag.memoryCfg.AutoPersist.EveryNTurns == 0 {
 		ag.memoryCfg.AutoPersist.EveryNTurns = 5
 	}
+	// Semantic memory defaults. EmbedModel left empty disables the
+	// embedding pipeline by design — opt-in via config — so we don't
+	// surprise existing setups that have no embedding-capable
+	// provider configured. Top-K / byte-cap only matter when
+	// EmbedModel is set.
+	if ag.memoryCfg.SemanticTopK == 0 {
+		ag.memoryCfg.SemanticTopK = 5
+	}
+	if ag.memoryCfg.SemanticByteCap == 0 {
+		ag.memoryCfg.SemanticByteCap = 1024
+	}
 
 	return ag
 }
@@ -409,9 +420,13 @@ type PGBackend struct {
 		Delete(ctx context.Context, agentID, channel, sessionID string) error
 		ListWebSessions(ctx context.Context, agentID string) ([]map[string]string, error)
 	}
-	MemoryStore interface {
-		Insert(ctx context.Context, agentID, kind, content string, embedding []float32, tags []string) (string, error)
-	}
+	// MemoryStore must support dual-write Insert AND semantic search,
+	// so the read path can pull the top-k most-relevant facts into
+	// the system prompt. The shape matches agent.PGMemoryStore — the
+	// indirection (vs using PGMemoryStore directly) only exists to
+	// keep PGBackend a flat struct so callers don't need to know
+	// about the MemoryHit type when only wiring up sessions/db.
+	MemoryStore PGMemoryStore
 	DBQuerier interface {
 		QueryRows(ctx context.Context, sql string, args ...any) ([]map[string]any, error)
 		Exec(ctx context.Context, sql string, args ...any) (int64, error)
@@ -608,7 +623,13 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// Hook: BeforeSystemPrompt
 	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: BeforeSystemPrompt})
 
-	systemPrompt := a.ctxBuilder.BuildSystemPrompt()
+	// Pull semantic-search hits for the current user query so the
+	// system prompt's Relevant Memory section is seeded BEFORE the LLM
+	// call. This is the "read path" half of memory P0: without it, pg
+	// SearchSemantic is dead code and the embedding pipeline above
+	// only ever writes, never reads.
+	memHits := a.searchRelevantMemory(ctx, msg.Text)
+	systemPrompt := a.ctxBuilder.BuildSystemPromptWithMemory(memHits, a.memoryCfg.SemanticByteCap)
 
 	// Hook: AfterSystemPrompt
 	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterSystemPrompt})
@@ -945,6 +966,13 @@ func (a *Agent) SessionSystemPrompt() SystemPromptInfo {
 // runPostTurn fires PostTurn hooks and handles auto-persist and skills learning.
 func (a *Agent) runPostTurn(ctx context.Context, messages []provider.Message, toolCallCount int) {
 	a.turnCount++
+	slog.Info("runPostTurn",
+		"agent", a.name,
+		"turnCount", a.turnCount,
+		"autoPersistEnabled", a.memoryCfg.AutoPersist.Enabled,
+		"everyNTurns", a.memoryCfg.AutoPersist.EveryNTurns,
+		"embedModel", a.memoryCfg.EmbedModel,
+	)
 
 	// Index user/assistant messages in FTS
 	if a.ftsStore != nil {
@@ -965,19 +993,35 @@ func (a *Agent) runPostTurn(ctx context.Context, messages []provider.Message, to
 		Workspace:     a.workspacePath,
 	})
 
-	// Auto-persist memory every N turns
+	// Auto-persist memory every N turns. The embed model is plumbed
+	// in so AutoPersistMemory can attach vector embeddings to each
+	// fact before the dual-write to pg — without this the embedding
+	// column stays NULL forever and SearchSemantic at read time has
+	// nothing to rank.
 	if a.memoryCfg.AutoPersist.Enabled && a.turnCount%a.memoryCfg.AutoPersist.EveryNTurns == 0 {
 		model := a.memoryCfg.AutoPersist.Model
 		if model == "" {
 			model = a.model
 		}
-		go AutoPersistMemory(ctx, a.memory, a.getProvider(), model, messages)
+		embedModel := a.memoryCfg.EmbedModel
+		embedProv := a.embedProvider(embedModel)
+		// Use a detached context with a generous timeout so the
+		// background goroutine survives after the HTTP request ctx
+		// is cancelled. The LLM extraction + embedding + pg writes
+		// typically finish in <10s but we allow 60s for slow models.
+		bgCtx, bgCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		go func() {
+			defer bgCancel()
+			AutoPersistMemory(bgCtx, a.memory, a.getProvider(), model, embedProv, embedModel, messages)
+		}()
 	}
 
 	// Skills learner
 	if a.skillsLearner != nil {
+		bgCtx2, bgCancel2 := context.WithTimeout(context.Background(), 60*time.Second)
 		go func() {
-			if err := a.skillsLearner.MaybeExtract(ctx, messages, toolCallCount); err != nil {
+			defer bgCancel2()
+			if err := a.skillsLearner.MaybeExtract(bgCtx2, messages, toolCallCount); err != nil {
 				slog.Debug("skills learner error", "error", err)
 			}
 		}()
@@ -1000,7 +1044,11 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 
 	sess := a.sessions.Get(msg.Channel, msg.ChatID)
 	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: BeforeSystemPrompt})
-	systemPrompt := a.ctxBuilder.BuildSystemPrompt()
+	// Mirror the HandleMessage read path: seed Relevant Memory from
+	// semantic search before assembling the system prompt. Without this
+	// the streaming variant would silently regress to MEMORY.md-only.
+	memHits := a.searchRelevantMemory(ctx, msg.Text)
+	systemPrompt := a.ctxBuilder.BuildSystemPromptWithMemory(memHits, a.memoryCfg.SemanticByteCap)
 	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterSystemPrompt})
 
 	// Store raw user message — see HandleMessage for the fall-through rules.
@@ -1033,6 +1081,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 	messages = append(messages, sessionMsgs...)
 
 	toolDefs := a.registry.Definitions()
+	totalToolCalls := 0
 
 	type toolCallSig struct {
 		name string
@@ -1068,9 +1117,16 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 				return a.stringStream(resp.Content)
 			}
 
-			// Collect content in background for session storage
+			// Collect content in background for session storage.
+			// When the stream finishes, fire runPostTurn so auto-persist
+			// and skills-learner trigger on the streaming path too —
+			// previously they only ran on the non-streaming HandleMessage,
+			// meaning Web UI users never got memory persistence.
 			outCh := make(chan provider.StreamChunk, 64)
 			outReader := provider.NewStreamReader(outCh)
+			capturedMessages := make([]provider.Message, len(messages))
+			copy(capturedMessages, messages)
+			capturedToolCalls := totalToolCalls
 			go func() {
 				defer close(outCh)
 				var full strings.Builder
@@ -1088,7 +1144,10 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 						return
 					}
 				}
-				sess.Append(provider.Message{Role: "assistant", Content: full.String()})
+				finalContent := full.String()
+				sess.Append(provider.Message{Role: "assistant", Content: finalContent})
+				capturedMessages = append(capturedMessages, provider.Message{Role: "assistant", Content: finalContent})
+				a.runPostTurn(ctx, capturedMessages, capturedToolCalls)
 			}()
 			return outReader
 		}
@@ -1141,6 +1200,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 		results := a.engine.executeToolsConcurrently(ctx, a.registry, resp.ToolCalls, a.workspacePath)
 
 		for idx, r := range results {
+			totalToolCalls++
 			tc := resp.ToolCalls[idx]
 			a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterToolCall, ToolName: r.toolName, ToolResult: r.result, Error: r.err})
 

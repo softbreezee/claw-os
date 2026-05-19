@@ -15,30 +15,50 @@ import (
 	"github.com/softbreezee/claw-os/internal/provider"
 )
 
-// PGMemoryStore is the interface for PostgreSQL-backed memory persistence.
-// Implemented by *pg.MemoryStore; defined here to avoid import cycles.
+// MemoryHit is a single semantic-search result surfaced to the system
+// prompt. Mirrors *pg.MemoryRecord but keeps internal/agent free of
+// the pg import (which would create a cycle via internal/gateway).
+type MemoryHit struct {
+	Kind    string
+	Content string
+}
+
+// PGMemoryStore is the abstract interface used by the agent layer for
+// PostgreSQL-backed memory persistence and retrieval. Implemented by
+// *pg.MemoryStore via an adapter in the gateway; declared here as a
+// minimal contract so internal/agent doesn't import internal/store/pg.
 type PGMemoryStore interface {
 	Insert(ctx context.Context, agentID, kind, content string, embedding []float32, tags []string) (string, error)
-	LoadAll(ctx context.Context, agentID string) ([]interface{ GetContent() string }, error)
+	SearchSemantic(ctx context.Context, agentID string, queryEmbedding []float32, limit int) ([]MemoryHit, error)
 }
 
 // Memory manages the dual-layer memory system (MEMORY.md + HISTORY.md).
-// When pgStore is set, facts are also persisted to PostgreSQL.
+// When pgStore is set, facts are also persisted to PostgreSQL and the
+// read path can surface semantic-search hits into the system prompt.
 type Memory struct {
 	mu        sync.Mutex // serialises all file writes to prevent concurrent-write races
 	workspace string
 	agentID   string
-	pgStore   interface {
-		Insert(ctx context.Context, agentID, kind, content string, embedding []float32, tags []string) (string, error)
-	}
+	pgStore   PGMemoryStore
 }
 
-// SetPGStore attaches a PostgreSQL memory store for dual-write.
-func (m *Memory) SetPGStore(store interface {
-	Insert(ctx context.Context, agentID, kind, content string, embedding []float32, tags []string) (string, error)
-}, agentID string) {
+// SetPGStore attaches a PostgreSQL memory store for dual-write +
+// semantic-search read-path injection.
+func (m *Memory) SetPGStore(store PGMemoryStore, agentID string) {
 	m.agentID = agentID
 	m.pgStore = store
+}
+
+// PGStore returns the attached store (nil if pg backend not wired).
+// Used by ContextBuilder to decide whether to inject a Relevant Memory
+// section into the system prompt.
+func (m *Memory) PGStore() PGMemoryStore {
+	return m.pgStore
+}
+
+// AgentID returns the agent ID associated with this memory's pg store.
+func (m *Memory) AgentID() string {
+	return m.agentID
 }
 
 // NewMemory creates a new memory manager.
@@ -243,7 +263,13 @@ func (m *Memory) LoadUserFile() string {
 
 // AutoPersistMemory uses an LLM to extract facts from recent messages and
 // append them to MEMORY.md and USER.md. Called every N turns.
-func AutoPersistMemory(ctx context.Context, mem *Memory, prov provider.Provider, model string, messages []provider.Message) {
+//
+// prov is the chat provider used for fact extraction (LLM call).
+// embedProv is the provider used for embedding (may differ from prov
+// when the embed model lives on a different upstream, e.g. qwen-embed
+// vs deepseek). embedModel selects the embedding model; when blank,
+// facts are persisted with embedding=NULL.
+func AutoPersistMemory(ctx context.Context, mem *Memory, prov provider.Provider, model string, embedProv provider.Provider, embedModel string, messages []provider.Message) {
 	// Build a summary of recent messages for the LLM
 	var sb strings.Builder
 	// Only look at last 20 messages to keep prompt small
@@ -286,11 +312,12 @@ If nothing worth saving, output: {"memory_facts": [], "user_notes": []}`,
 		sb.String(),
 	)
 
+	slog.Info("auto-persist: extracting facts", "model", model, "promptLen", len(extractPrompt))
 	resp, err := prov.Chat(ctx, []provider.Message{
 		{Role: "user", Content: extractPrompt},
-	}, nil, model, 200, 0.3)
+	}, nil, model, 500, 0.3)
 	if err != nil {
-		slog.Debug("auto-persist: LLM call failed", "error", err)
+		slog.Warn("auto-persist: LLM call failed", "error", err)
 		return
 	}
 
@@ -299,9 +326,10 @@ If nothing worth saving, output: {"memory_facts": [], "user_notes": []}`,
 		UserNotes   []string `json:"user_notes"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(resp.Content)), &result); err != nil {
-		slog.Debug("auto-persist: failed to parse LLM response", "error", err)
+		slog.Warn("auto-persist: failed to parse LLM response", "error", err, "raw", resp.Content)
 		return
 	}
+	slog.Info("auto-persist: extracted", "facts", len(result.MemoryFacts), "notes", len(result.UserNotes))
 
 	// Atomically append new memory facts (read-modify-write under lock)
 	if len(result.MemoryFacts) > 0 {
@@ -325,10 +353,15 @@ If nothing worth saving, output: {"memory_facts": [], "user_notes": []}`,
 			slog.Info("auto-persist: updated MEMORY.md", "facts", len(result.MemoryFacts))
 		}
 
-		// Dual-write to PostgreSQL if configured
+		// Dual-write to PostgreSQL if configured. Each fact gets its
+		// own embedding so SearchSemantic at read time can rank by
+		// cosine similarity. Embedding failures degrade silently to
+		// NULL — we'd rather keep the fact than drop it because the
+		// embedding API is flaky.
 		if mem.pgStore != nil {
 			for _, fact := range result.MemoryFacts {
-				if _, err := mem.pgStore.Insert(ctx, mem.agentID, "fact", fact, nil, nil); err != nil {
+				emb := embedFactSafe(ctx, embedProv, embedModel, fact)
+				if _, err := mem.pgStore.Insert(ctx, mem.agentID, "fact", fact, emb, nil); err != nil {
 					slog.Warn("auto-persist: pg memory insert failed", "error", err)
 				}
 			}
@@ -357,10 +390,12 @@ If nothing worth saving, output: {"memory_facts": [], "user_notes": []}`,
 			slog.Info("auto-persist: updated USER.md", "notes", len(result.UserNotes))
 		}
 
-		// Dual-write user notes to PostgreSQL
+		// Dual-write user notes to PostgreSQL with embeddings (same
+		// degradation strategy as facts above).
 		if mem.pgStore != nil {
 			for _, note := range result.UserNotes {
-				if _, err := mem.pgStore.Insert(ctx, mem.agentID, "user_note", note, nil, nil); err != nil {
+				emb := embedFactSafe(ctx, embedProv, embedModel, note)
+				if _, err := mem.pgStore.Insert(ctx, mem.agentID, "user_note", note, emb, nil); err != nil {
 					slog.Warn("auto-persist: pg user_note insert failed", "error", err)
 				}
 			}
@@ -391,4 +426,27 @@ func truncateStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// embedFactSafe wraps the provider Embed call with the silent-degrade
+// policy used by both fact and user_note writes:
+//   - blank embedModel  → skip (returns nil)
+//   - ErrEmbeddingNotSupported → skip without warn (it's a per-provider
+//     property, not an error condition)
+//   - any other error   → warn + return nil so the fact still lands
+//     with a NULL embedding rather than getting dropped entirely
+func embedFactSafe(ctx context.Context, prov provider.Provider, embedModel, text string) []float32 {
+	if embedModel == "" || prov == nil || text == "" {
+		return nil
+	}
+	emb, err := prov.Embed(ctx, text, embedModel)
+	if err != nil {
+		if err == provider.ErrEmbeddingNotSupported {
+			return nil
+		}
+		slog.Warn("auto-persist: embed failed, storing without embedding",
+			"error", err, "model", embedModel)
+		return nil
+	}
+	return emb
 }

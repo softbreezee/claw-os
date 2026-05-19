@@ -65,8 +65,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Resolve agent configs
 	resolved := config.ResolveAgents(cfg)
 
-	// Create agent manager
-	agentMgr, err := agent.NewManager(resolved, registry, mb)
+	// Create agent manager — pass the full config so agents pick up
+	// memory, privacy, skills-learner and other cross-cutting settings.
+	agentMgr, err := agent.NewManager(resolved, registry, mb, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +91,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 				memStore := pgstore.NewMemoryStore(db)
 				pgBackend := &agent.PGBackend{
 					SessionStore:    sessionStore,
-					MemoryStore:     memStore,
+					MemoryStore:     &memStoreAdapter{inner: memStore},
 					DBQuerier:       db,
 					SchemaRegistrar: db,
 				}

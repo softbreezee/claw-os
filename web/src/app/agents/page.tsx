@@ -24,6 +24,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { ChevronDown } from "lucide-react";
 import {
   Table,
@@ -34,8 +40,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Bot, Plus, Pencil, Trash2, FolderOpen, Check } from "lucide-react";
+import { Bot, Plus, Pencil, Trash2, FolderOpen, Check, Lock } from "lucide-react";
 import { getAgents, getConfig, createAgent, updateAgent, deleteAgent, restartDaemon, waitForGateway, type AgentDetail } from "@/lib/api";
+
+// Ordered list of workspace files shown in the Edit dialog tabs.
+// HISTORY.md is last and rendered read-only.
+const AGENT_WORKSPACE_FILES = [
+  "SOUL.md",
+  "MEMORY.md",
+  "USER.md",
+  "AGENTS.md",
+  "HISTORY.md",
+] as const;
+
+const READONLY_FILES = new Set<string>(["HISTORY.md"]);
 
 interface ModelGroup {
   group: string;
@@ -115,7 +133,7 @@ function ModelCombobox({
           ref={inputRef}
           value={inputVal}
           onChange={(e) => handleInput(e.target.value)}
-          onFocus={() => { setOpen(true); setIsTyping(false); }}
+          onFocus={() => { setIsTyping(false); }}
           placeholder="e.g. deepseek-v4-flash"
           className="pr-8 font-mono text-sm"
         />
@@ -189,7 +207,7 @@ export default function AgentsPage() {
   const [newSoul, setNewSoul] = useState("");
 
   const [editModel, setEditModel] = useState("");
-  const [editSoul, setEditSoul] = useState("");
+  const [editFiles, setEditFiles] = useState<Record<string, string>>({});
 
   const fetchAgents = () => {
     setLoading(true);
@@ -255,14 +273,25 @@ export default function AgentsPage() {
   const handleEdit = (agent: AgentDetail) => {
     setEditAgent(agent);
     setEditModel(agent.model);
-    setEditSoul(agent.soul || "");
+    // Populate editFiles from the files map returned by the API.
+    // Fall back to the legacy soul field for any agent whose server hasn't
+    // been updated yet (or hasn't been restarted to pick up the change).
+    const initial: Record<string, string> = {};
+    if (agent.files && Object.keys(agent.files).length > 0) {
+      for (const name of AGENT_WORKSPACE_FILES) {
+        initial[name] = agent.files[name] ?? "";
+      }
+    } else {
+      initial["SOUL.md"] = agent.soul ?? "";
+    }
+    setEditFiles(initial);
     setEditOpen(true);
   };
 
   const handleSave = async () => {
     if (!editAgent) return;
     setSaving(true);
-    await updateAgent(editAgent.id, { model: editModel, soul: editSoul });
+    await updateAgent(editAgent.id, { model: editModel, files: editFiles });
     setEditOpen(false);
     setSaving(false);
     fetchAgents();
@@ -453,18 +482,20 @@ export default function AgentsPage() {
 
       {/* Edit Dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+        <DialogContent className="sm:max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
           <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <Bot className="h-5 w-5 text-primary" />
               {editAgent?.id}
             </DialogTitle>
             <DialogDescription>
-              Edit agent configuration
+              Edit agent configuration and workspace files
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2 overflow-y-auto flex-1 min-h-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+          <div className="flex flex-col gap-4 overflow-hidden flex-1 min-h-0 py-2">
+            {/* Model + Workspace row */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 shrink-0">
               <div className="space-y-2">
                 <Label>Model</Label>
                 <ModelCombobox value={editModel} onChange={setEditModel} groups={modelGroups} />
@@ -478,17 +509,55 @@ export default function AgentsPage() {
                 />
               </div>
             </div>
-            <div className="space-y-2">
-              <Label>Personality (SOUL.md)</Label>
-              <Textarea
-                value={editSoul}
-                onChange={(e) => setEditSoul(e.target.value)}
-                placeholder="Your personality and behavioral guidelines..."
-                rows={8}
-                className="resize-none font-moto text-sm min-h-[200px]"
-              />
-            </div>
+
+            {/* Workspace files as tabs */}
+            <Tabs defaultValue="SOUL.md" className="flex flex-col overflow-y-auto flex-1 min-h-0">
+              {/* Single-row scrollable tab bar — no wrapping */}
+              <TabsList className="shrink-0 w-full overflow-x-auto flex-nowrap h-9 gap-0.5 justify-start bg-muted/50 px-1 [&::-webkit-scrollbar]:hidden">
+                {AGENT_WORKSPACE_FILES.map((name) => (
+                  <TabsTrigger
+                    key={name}
+                    value={name}
+                    className="shrink-0 text-xs font-mono data-[state=active]:bg-background"
+                  >
+                    {READONLY_FILES.has(name) && (
+                      <Lock className="h-2.5 w-2.5 mr-1 opacity-50" />
+                    )}
+                    {name}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+
+              {AGENT_WORKSPACE_FILES.map((name) => {
+                const isReadonly = READONLY_FILES.has(name);
+                return (
+                  <TabsContent
+                    key={name}
+                    value={name}
+                    className="mt-2"
+                  >
+                    <Textarea
+                      value={editFiles[name] ?? ""}
+                      onChange={(e) =>
+                        setEditFiles((prev) => ({ ...prev, [name]: e.target.value }))
+                      }
+                      readOnly={isReadonly}
+                      placeholder={
+                        isReadonly
+                          ? "This file is maintained by the agent runtime and is read-only."
+                          : `Content of ${name}…`
+                      }
+                      className={[
+                        "w-full min-h-[320px] resize-y font-mono text-sm leading-relaxed",
+                        isReadonly ? "opacity-60 cursor-not-allowed bg-muted/30" : "",
+                      ].join(" ")}
+                    />
+                  </TabsContent>
+                );
+              })}
+            </Tabs>
           </div>
+
           <DialogFooter className="shrink-0">
             <Button
               variant="outline"

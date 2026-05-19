@@ -118,6 +118,24 @@ type GatewayCfg struct {
 type MemoryCfg struct {
 	AutoPersist AutoPersistCfg `json:"autoPersist,omitempty"`
 	FTS         FTSCfg         `json:"fts,omitempty"`
+	// EmbedModel selects the embedding model used for semantic memory
+	// search. Format follows the same "provider/model" convention as
+	// Agent.Model so the provider registry can route the request.
+	// Empty disables the embedding pipeline entirely (memories still
+	// land in pg, but with embedding=NULL — read path will fall back
+	// to keyword/recency search).
+	// Default when unset and pg is on: "openai/text-embedding-3-small"
+	// (matches the vector(1536) column dimension shipped by Migrate).
+	EmbedModel string `json:"embedModel,omitempty"`
+	// SemanticTopK caps how many memories the Relevant Memory section
+	// pulls in per turn (default 5). Tune down if your prompt budget
+	// is tight, up if you have very many small facts.
+	SemanticTopK int `json:"semanticTopK,omitempty"`
+	// SemanticByteCap is the hard byte ceiling for the joined Relevant
+	// Memory block — past this, the section is truncated. Defaults to
+	// 1024 bytes (~256 tokens) which keeps the prompt overhead bounded
+	// even when each fact is verbose.
+	SemanticByteCap int `json:"semanticByteCap,omitempty"`
 }
 
 // AutoPersistCfg controls automatic memory persistence after agent turns.
