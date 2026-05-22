@@ -160,6 +160,7 @@ export default function ModelsPage() {
   const [formError, setFormError] = useState<string>("");
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [testError, setTestError] = useState("");
+  const [testedModel, setTestedModel] = useState("");
 
   // Collect all provider/model options for default model dropdown
   const allModelOptions: { value: string; label: string }[] = [];
@@ -243,6 +244,7 @@ export default function ModelsPage() {
     setFormError("");
     setTestStatus("idle");
     setTestError("");
+    setTestedModel("");
     setDialogOpen(true);
   };
 
@@ -267,6 +269,7 @@ export default function ModelsPage() {
     setFormError("");
     setTestStatus("idle");
     setTestError("");
+    setTestedModel("");
     setDialogOpen(true);
   };
 
@@ -293,16 +296,21 @@ export default function ModelsPage() {
     setFormError("");
     setTestStatus("idle");
     setTestError("");
+    setTestedModel("");
   };
 
   const handleTestConnection = async () => {
     setTestStatus("testing");
     setTestError("");
+    // Determine which model to test: if user picked one via the dropdown,
+    // use that; otherwise fall back to the first valid model.
+    const probeModel =
+      testedModel ||
+      formModels.find((m) => m.id.trim())?.id.trim() ||
+      "";
+    // Persist which model is being tested so the result label is accurate.
+    setTestedModel(probeModel);
     try {
-      // Use the first model the user has configured for the probe request.
-      // Many providers (DeepSeek, internal gateways, locked-down endpoints)
-      // reject a hard-coded gpt-4o-mini default, so prefer a real model.
-      const probeModel = formModels.find((m) => m.id.trim())?.id.trim() || "";
       const result = await testProvider({
         apiBase: formApiBase,
         // When editing an existing provider, fall back to the stored key
@@ -692,9 +700,35 @@ export default function ModelsPage() {
               </div>
             </div>
 
-            {/* Test Connection */}
+            {/* Test Connection — shows which model is used for the probe */}
             <div className="space-y-2">
               <div className="flex items-center gap-3">
+                {/* Model selector: visible only when 2+ models configured */}
+                {formModels.filter((m) => m.id.trim()).length >= 2 && (
+                  <Select
+                    value={testedModel || formModels.find((m) => m.id.trim())?.id || ""}
+                    onValueChange={(v: string | null) => {
+                      if (v) setTestedModel(v);
+                      setTestStatus("idle");
+                      setTestError("");
+                    }}
+                  >
+                    <SelectTrigger className="w-[200px] h-8 text-xs font-mono">
+                      <SelectValue placeholder="Select model to test" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {formModels
+                        .filter((m) => m.id.trim())
+                        .map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            <span className="font-mono text-xs">
+                              {m.name || m.id}
+                            </span>
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -706,9 +740,21 @@ export default function ModelsPage() {
                 {testStatus === "success" && (
                   <Badge
                     variant="outline"
-                    className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                    className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 max-w-[280px]"
                   >
-                    Connected
+                    <span className="truncate">
+                      Connected
+                      {testedModel && (
+                        <>
+                          {" "}
+                          <span className="font-mono opacity-80">
+                            ({formModels.find((m) => m.id === testedModel)?.name ||
+                              testedModel}
+                            )
+                          </span>
+                        </>
+                      )}
+                    </span>
                   </Badge>
                 )}
               </div>
@@ -718,6 +764,7 @@ export default function ModelsPage() {
                 </p>
               )}
             </div>
+
 
             {/* Models Section */}
             <div className="space-y-3 pt-2 border-t border-border">

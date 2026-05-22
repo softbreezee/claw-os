@@ -162,6 +162,11 @@ func NewAgentWithFullCfg(rc config.ResolvedAgent, prov provider.Provider, mb *bu
 	if ag.memoryCfg.AutoPersist.EveryNTurns == 0 {
 		ag.memoryCfg.AutoPersist.EveryNTurns = 5
 	}
+	// Per-agent embedModel override (from agent config).
+	// When empty, embedding is disabled for this agent.
+	if rc.EmbedModel != "" {
+		ag.memoryCfg.EmbedModel = rc.EmbedModel
+	}
 	// Semantic memory defaults. EmbedModel left empty disables the
 	// embedding pipeline by design — opt-in via config — so we don't
 	// surprise existing setups that have no embedding-capable

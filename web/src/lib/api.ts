@@ -58,6 +58,7 @@ export interface ProviderInfo {
 export interface AgentDetail {
   id: string;
   model: string;
+  embedModel?: string;
   workspace: string;
   maxTokens?: number;
   temperature?: number;

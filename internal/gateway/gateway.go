@@ -462,7 +462,7 @@ func buildProviderRegistry(cfg *config.Config) *provider.Registry {
 			slog.Warn("provider entry empty, skipping", "name", name)
 			continue
 		}
-		p := provider.NewProvider(pCfg.APIKey, pCfg.APIBase, pCfg.APIType)
+		p := provider.NewProvider(pCfg.APIKey, pCfg.APIBase, pCfg.APIType, pCfg.EmbedPath)
 		reg.Set(name, p)
 		names = append(names, name)
 		slog.Info("provider registered", "name", name, "apiBase", pCfg.APIBase, "apiType", pCfg.APIType)

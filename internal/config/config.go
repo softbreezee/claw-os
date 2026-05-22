@@ -222,11 +222,12 @@ type ModelEntry struct {
 
 // ProviderConfig holds API credentials for an LLM provider.
 type ProviderConfig struct {
-	APIKey   string       `json:"apiKey"`
-	APIBase  string       `json:"apiBase"`
-	APIType  string       `json:"apiType,omitempty"`
-	AuthType string       `json:"authType,omitempty"`
-	Models   []ModelEntry `json:"models,omitempty"`
+	APIKey    string       `json:"apiKey"`
+	APIBase   string       `json:"apiBase"`
+	APIType   string       `json:"apiType,omitempty"`
+	AuthType  string       `json:"authType,omitempty"`
+	EmbedPath string       `json:"embedPath,omitempty"`
+	Models    []ModelEntry `json:"models,omitempty"`
 }
 
 // UnmarshalJSON handles backward compatibility: reads "api" as "apiType".
@@ -264,6 +265,7 @@ type AgentDefaults struct {
 type AgentEntry struct {
 	ID                string                     `json:"id"`
 	Workspace         string                     `json:"workspace,omitempty"`
+	EmbedModel        string                     `json:"embedModel,omitempty"`
 	Model             string                     `json:"model,omitempty"`
 	MaxTokens         int                        `json:"maxTokens,omitempty"`
 	Temperature       float64                    `json:"temperature,omitempty"`
@@ -323,6 +325,7 @@ type Peer struct {
 // AgentFileConfig is the schema for agent.json inside an agent workspace.
 type AgentFileConfig struct {
 	Model             string                     `json:"model,omitempty"`
+	EmbedModel        string                     `json:"embedModel,omitempty"`
 	MaxTokens         int                        `json:"maxTokens,omitempty"`
 	Temperature       float64                    `json:"temperature,omitempty"`
 	MaxToolIterations int                        `json:"maxToolIterations,omitempty"`
@@ -366,6 +369,7 @@ type ResolvedAgent struct {
 	ID                string
 	Workspace         string
 	Model             string
+	EmbedModel        string
 	MaxTokens         int
 	Temperature       float64
 	MaxToolIterations int
@@ -467,6 +471,7 @@ func (cfg *Config) MergedAgentConfig(entry AgentEntry) ResolvedAgent {
 		ID:                entry.ID,
 		Workspace:         workspace,
 		Model:             cfg.Agents.Defaults.Model,
+		EmbedModel:        cfg.Memory.EmbedModel, // global default, overridden below
 		MaxTokens:         cfg.Agents.Defaults.MaxTokens,
 		Temperature:       cfg.Agents.Defaults.Temperature,
 		MaxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
@@ -495,6 +500,9 @@ func (cfg *Config) MergedAgentConfig(entry AgentEntry) ResolvedAgent {
 	if entry.PolicyPreset != "" {
 		resolved.PolicyPreset = entry.PolicyPreset
 	}
+	if entry.EmbedModel != "" {
+		resolved.EmbedModel = entry.EmbedModel
+	}
 
 	// Start with global MCP servers
 	if len(cfg.MCPServers) > 0 {
@@ -520,6 +528,9 @@ func (cfg *Config) MergedAgentConfig(entry AgentEntry) ResolvedAgent {
 			}
 			if fileCfg.MaxToolIterations > 0 {
 				resolved.MaxToolIterations = fileCfg.MaxToolIterations
+			}
+			if fileCfg.EmbedModel != "" {
+				resolved.EmbedModel = fileCfg.EmbedModel
 			}
 			resolved.Skills = fileCfg.Skills
 

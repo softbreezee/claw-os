@@ -58,7 +58,7 @@ func (p *OpenAIProvider) Embed(ctx context.Context, text string, model string) (
 		return nil, fmt.Errorf("embed: marshal: %w", err)
 	}
 
-	url := p.apiBase + "/embeddings"
+	url := p.apiBase + p.embedPath
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("embed: create request: %w", err)

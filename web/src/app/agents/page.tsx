@@ -40,7 +40,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Bot, Plus, Pencil, Trash2, FolderOpen, Check, Lock } from "lucide-react";
+import { Bot, Brain, Plus, Pencil, Trash2, FolderOpen, Check, Lock, RefreshCw } from "lucide-react";
 import { getAgents, getConfig, createAgent, updateAgent, deleteAgent, restartDaemon, waitForGateway, type AgentDetail } from "@/lib/api";
 
 // Ordered list of workspace files shown in the Edit dialog tabs.
@@ -207,6 +207,7 @@ export default function AgentsPage() {
   const [newSoul, setNewSoul] = useState("");
 
   const [editModel, setEditModel] = useState("");
+  const [editEmbedModel, setEditEmbedModel] = useState("");
   const [editFiles, setEditFiles] = useState<Record<string, string>>({});
 
   const fetchAgents = () => {
@@ -273,6 +274,7 @@ export default function AgentsPage() {
   const handleEdit = (agent: AgentDetail) => {
     setEditAgent(agent);
     setEditModel(agent.model);
+    setEditEmbedModel(agent.embedModel || "");
     // Populate editFiles from the files map returned by the API.
     // Fall back to the legacy soul field for any agent whose server hasn't
     // been updated yet (or hasn't been restarted to pick up the change).
@@ -291,7 +293,7 @@ export default function AgentsPage() {
   const handleSave = async () => {
     if (!editAgent) return;
     setSaving(true);
-    await updateAgent(editAgent.id, { model: editModel, files: editFiles });
+    await updateAgent(editAgent.id, { model: editModel, embedModel: editEmbedModel, files: editFiles });
     setEditOpen(false);
     setSaving(false);
     fetchAgents();
@@ -507,6 +509,35 @@ export default function AgentsPage() {
                   disabled
                   className="font-mono text-xs opacity-60"
                 />
+              </div>
+            </div>
+
+            {/* Vector Memory */}
+            <div className="shrink-0 rounded-lg border border-border bg-muted/30 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Brain className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">Vector Memory</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-muted-foreground/60">
+                    {editEmbedModel ? "enabled" : "disabled"}
+                  </span>
+                  <span className={`h-2 w-2 rounded-full ${editEmbedModel ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Embedding Model</Label>
+                <Input
+                  value={editEmbedModel}
+                  onChange={(e) => setEditEmbedModel(e.target.value)}
+                  placeholder="Leave empty to disable (e.g. local-embed/nomic-embed-text, openai/text-embedding-3-small)"
+                  className="font-mono text-xs h-8"
+                />
+                <p className="text-[10px] text-muted-foreground/50">
+                  Format: provider/model. Empty = vector memory disabled for this agent.
+                  Provider must have embedPath configured if using non-OpenAI path (e.g. Ollama needs embedPath: /api/embeddings).
+                </p>
               </div>
             </div>
 

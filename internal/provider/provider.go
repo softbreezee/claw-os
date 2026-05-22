@@ -137,9 +137,9 @@ func StripProviderPrefix(model string) string {
 
 // NewProvider creates a Provider based on apiType.
 // "anthropic-messages" creates an Anthropic provider, anything else creates OpenAI-compatible.
-func NewProvider(apiKey, apiBase, apiType string) Provider {
+func NewProvider(apiKey, apiBase, apiType, embedPath string) Provider {
 	if apiType == "anthropic-messages" {
 		return NewAnthropic(apiKey, apiBase)
 	}
-	return NewOpenAI(apiKey, apiBase)
+	return NewOpenAI(apiKey, apiBase, embedPath)
 }

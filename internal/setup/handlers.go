@@ -158,8 +158,25 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid request"})
 		return
 	}
-
 	base := strings.TrimRight(req.APIBase, "/")
+
+	// Resolve masked API key: when the frontend passes the stored (masked)
+	// key during an edit, look up the real key from config by matching the
+	// API base URL. Without this the test would send "sk-a1****wxyz" to
+	// the provider and always fail authentication.
+	apiKey := req.APIKey
+	if strings.Contains(apiKey, "****") {
+		cfg, err := config.Load()
+		if err == nil {
+			for _, prov := range cfg.Providers {
+				if strings.TrimRight(prov.APIBase, "/") == base {
+					apiKey = prov.APIKey
+					break
+				}
+			}
+		}
+	}
+
 	var testURL string
 	var method string
 	var body io.Reader
@@ -195,13 +212,13 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 
 	// Set auth headers based on API type
 	if req.APIType == "anthropic-messages" {
-		if req.APIKey != "" {
-			httpReq.Header.Set("x-api-key", req.APIKey)
+		if apiKey != "" {
+			httpReq.Header.Set("x-api-key", apiKey)
 		}
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
 	} else {
-		if req.APIKey != "" {
-			httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
+		if apiKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 		}
 	}
 

@@ -14,21 +14,29 @@ import (
 
 // OpenAIProvider implements the Provider interface for OpenAI-compatible APIs.
 type OpenAIProvider struct {
-	apiKey  string
-	apiBase string
-	client  *http.Client
+	apiKey    string
+	apiBase   string
+	embedPath string
+	client    *http.Client
 }
 
 // NewOpenAI creates a new OpenAI-compatible provider.
-func NewOpenAI(apiKey, apiBase string) *OpenAIProvider {
+//
+// embedPath is the path appended to apiBase for embedding requests
+// (default "/embeddings"). Use "/api/embeddings" for Ollama etc.
+func NewOpenAI(apiKey, apiBase, embedPath string) *OpenAIProvider {
 	if apiBase == "" {
 		apiBase = "https://api.openai.com/v1"
 	}
 	apiBase = strings.TrimRight(apiBase, "/")
+	if embedPath == "" {
+		embedPath = "/embeddings"
+	}
 	return &OpenAIProvider{
-		apiKey:  apiKey,
-		apiBase: apiBase,
-		client:  &http.Client{},
+		apiKey:    apiKey,
+		apiBase:   apiBase,
+		embedPath: embedPath,
+		client:    &http.Client{},
 	}
 }
 

@@ -1,7 +1,9 @@
 package setup
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/softbreezee/claw-os/internal/config"
+	"github.com/softbreezee/claw-os/internal/provider"
+	"github.com/softbreezee/claw-os/internal/store/pg"
 )
 
 // --- Agent Management ---
@@ -101,6 +105,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		agents = append(agents, map[string]any{
 			"id":                ra.ID,
 			"model":             normalizeModel(ra.Model, cfg),
+			"embedModel":        ra.EmbedModel,
 			"workspace":         ra.Workspace,
 			"maxTokens":         ra.MaxTokens,
 			"temperature":       ra.Temperature,
@@ -169,12 +174,106 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+func (s *Server) handleRebuildEmbeddings(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	resolved := config.ResolveAgents(cfg)
+	var workspace, embedModel string
+	for _, ra := range resolved {
+		if ra.ID == agentID {
+			workspace = ra.Workspace
+			embedModel = ra.EmbedModel
+			break
+		}
+	}
+	if workspace == "" {
+		jsonResponse(w, http.StatusNotFound, map[string]any{"ok": false, "error": "agent not found"})
+		return
+	}
+	if embedModel == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "embedModel not configured for this agent"})
+		return
+	}
+
+	memoryPath := filepath.Join(workspace, "MEMORY.md")
+	data, err := os.ReadFile(memoryPath)
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "read MEMORY.md: " + err.Error()})
+		return
+	}
+
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		jsonResponse(w, http.StatusOK, map[string]any{"ok": true, "facts": 0, "message": "MEMORY.md is empty"})
+		return
+	}
+
+	var facts []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		facts = append(facts, line)
+	}
+
+	idx := strings.Index(embedModel, "/")
+	if idx < 0 {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "embedModel must be 'provider/model'"})
+		return
+	}
+	providerName := embedModel[:idx]
+	provCfg, ok := cfg.Providers[providerName]
+	if !ok {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "provider not found: " + providerName})
+		return
+	}
+	prov := provider.NewProvider(provCfg.APIKey, provCfg.APIBase, provCfg.APIType, provCfg.EmbedPath)
+
+	if cfg.Storage.Type != "postgres" || cfg.Storage.DSN == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "storage must be postgres"})
+		return
+	}
+	db, err := pg.Open(context.Background(), cfg.Storage.DSN)
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "connect pg: " + err.Error()})
+		return
+	}
+	defer db.Pool.Close()
+
+	memStore := pg.NewMemoryStore(db)
+	if _, err := db.Pool.Exec(context.Background(), `DELETE FROM memories WHERE agent_id = $1`, agentID); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "delete old: " + err.Error()})
+		return
+	}
+
+	inserted := 0
+	for _, fact := range facts {
+		emb, e := prov.Embed(context.Background(), fact, embedModel)
+		if e != nil {
+			continue
+		}
+		if _, e := memStore.Insert(context.Background(), agentID, "fact", fact, emb, nil); e != nil {
+			continue
+		}
+		inserted++
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true, "facts": len(facts), "inserted": inserted, "message": fmt.Sprintf("Rebuilt: %d/%d facts", inserted, len(facts))})
+}
+
 func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {
-		Model string            `json:"model"`
-		Soul  string            `json:"soul"`
-		Files map[string]string `json:"files"`
+		Model      string            `json:"model"`
+		EmbedModel string            `json:"embedModel"`
+		Soul       string            `json:"soul"`
+		Files      map[string]string `json:"files"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid request"})
@@ -200,6 +299,7 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 			if req.Model != "" {
 				cfg.Agents.List[i].Model = req.Model
 			}
+			cfg.Agents.List[i].EmbedModel = req.EmbedModel
 			found = true
 			break
 		}

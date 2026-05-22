@@ -194,6 +194,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/agents", s.handleCreateAgent)
 	mux.HandleFunc("PUT /api/agents/{id}", s.handleUpdateAgent)
 	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
+	mux.HandleFunc("POST /api/agents/{id}/rebuild-embeddings", s.handleRebuildEmbeddings)
 
 	// Daemon control
 	mux.HandleFunc("POST /api/daemon/restart", s.handleDaemonRestart)
