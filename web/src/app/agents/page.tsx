@@ -41,7 +41,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Bot, Brain, Plus, Pencil, Trash2, FolderOpen, Check, Lock, RefreshCw } from "lucide-react";
-import { getAgents, getConfig, createAgent, updateAgent, deleteAgent, restartDaemon, waitForGateway, type AgentDetail } from "@/lib/api";
+import { getAgents, getConfig, createAgent, updateAgent, deleteAgent, restartDaemon, waitForGateway, rebuildEmbeddings, type AgentDetail } from "@/lib/api";
 
 // Ordered list of workspace files shown in the Edit dialog tabs.
 // HISTORY.md is last and rendered read-only.
@@ -198,6 +198,8 @@ export default function AgentsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildMsg, setRebuildMsg] = useState("");
   const [restarting, setRestarting] = useState(false);
 
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
@@ -297,6 +299,19 @@ export default function AgentsPage() {
     setEditOpen(false);
     setSaving(false);
     fetchAgents();
+  };
+
+  const handleRebuild = async () => {
+    if (!editAgent) return;
+    setRebuilding(true);
+    setRebuildMsg("");
+    const res = await rebuildEmbeddings(editAgent.id);
+    if (res.ok) {
+      setRebuildMsg(`Rebuilt: ${res.inserted}/${res.facts} facts embedded`);
+    } else {
+      setRebuildMsg(res.error || "Rebuild failed");
+    }
+    setRebuilding(false);
   };
 
   const handleDelete = async () => {
@@ -590,18 +605,35 @@ export default function AgentsPage() {
           </div>
 
           <DialogFooter className="shrink-0">
-            <Button
-              variant="outline"
-              onClick={() => setEditOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSave}
-              disabled={saving}
-            >
-              {saving ? "Saving..." : "Save Changes"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRebuild}
+                disabled={rebuilding}
+                title="Re-embed all facts from MEMORY.md into the vector store"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${rebuilding ? "animate-spin" : ""}`} />
+                {rebuilding ? "Rebuilding..." : "Rebuild Embeddings"}
+              </Button>
+              {rebuildMsg && (
+                <span className="text-xs text-muted-foreground">{rebuildMsg}</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setEditOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSave}
+                disabled={saving}
+              >
+                {saving ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

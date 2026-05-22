@@ -886,3 +886,10 @@ export async function deleteMcpServer(name: string): Promise<{ ok: boolean; erro
   });
   return res.json();
 }
+
+export async function rebuildEmbeddings(agentId: string): Promise<{ ok: boolean; facts: number; inserted: number; message?: string; error?: string }> {
+  const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/rebuild-embeddings`, {
+    method: "POST",
+  });
+  return res.json();
+}

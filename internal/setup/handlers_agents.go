@@ -219,6 +219,15 @@ func (s *Server) handleRebuildEmbeddings(w http.ResponseWriter, r *http.Request)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		// Skip markdown table separators (|---|...)
+		stripped := strings.TrimRight(strings.TrimLeft(line, "|"), "|")
+		if stripped != "" && isOnly(stripped, '-', ' ', ':') {
+			continue
+		}
+		// Skip lines that are only formatting (list markers, dashes)
+		if line == "-" || line == "---" || line == "***" {
+			continue
+		}
 		facts = append(facts, line)
 	}
 
@@ -265,6 +274,19 @@ func (s *Server) handleRebuildEmbeddings(w http.ResponseWriter, r *http.Request)
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true, "facts": len(facts), "inserted": inserted, "message": fmt.Sprintf("Rebuilt: %d/%d facts", inserted, len(facts))})
+}
+
+func isOnly(s string, chars ...rune) bool {
+	outer:
+	for _, r := range s {
+		for _, c := range chars {
+			if r == c {
+				continue outer
+			}
+		}
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
