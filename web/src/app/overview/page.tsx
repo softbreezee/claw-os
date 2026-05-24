@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { getStatus, type StatusResponse } from "@/lib/api";
+import { getStatus, getTasks, type StatusResponse, type TaskInfo } from "@/lib/api";
 import {
   Activity,
   Bot,
@@ -82,15 +82,16 @@ function QuickAction({
 
 export default function OverviewPage() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [tasks, setTasks] = useState<TaskInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const fetchStatus = () => {
     setLoading(true);
-    getStatus()
-      .then((s) => { setStatus(s); setLastUpdated(new Date()); })
-      .catch(() => setStatus(null))
-      .finally(() => setLoading(false));
+    Promise.all([
+      getStatus().then((s) => { setStatus(s); setLastUpdated(new Date()); }).catch(() => setStatus(null)),
+      getTasks().then(setTasks).catch(() => setTasks([])),
+    ]).finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -217,7 +218,11 @@ export default function OverviewPage() {
           </div>
           {status?.agents && status.agents.length > 0 ? (
             <div className="divide-y divide-border/50">
-              {status.agents.map((agent) => (
+              {status.agents.map((agent) => {
+                const agentTasks = tasks.filter((t) => t.agentId === agent.id);
+                const running = agentTasks.some((t) => t.status === "running");
+                const pending = agentTasks.filter((t) => t.status === "pending").length;
+                return (
                 <div key={agent.id} className="flex items-center justify-between px-5 py-3 hover:bg-muted/30 transition-colors">
                   <div className="flex items-center gap-3">
                     <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">
@@ -228,11 +233,22 @@ export default function OverviewPage() {
                       <p className="text-[10px] text-muted-foreground font-mono">{agent.model}</p>
                     </div>
                   </div>
-                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px]">
-                    Active
-                  </Badge>
+                  {running ? (
+                    <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20 text-[10px]">
+                      Busy
+                    </Badge>
+                  ) : pending > 0 ? (
+                    <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20 text-[10px]">
+                      {pending} queued
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px]">
+                      Idle
+                    </Badge>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-10 text-center px-5">
@@ -310,6 +326,50 @@ export default function OverviewPage() {
           </div>
         </div>
       )}
+
+      {/* Task Queue */}
+      <div className="rounded-xl border border-border bg-card overflow-hidden">
+        <div className="flex items-center gap-2 px-5 py-4 border-b border-border">
+          <Activity className="h-4 w-4 text-orange-500" />
+          <h3 className="font-medium text-sm">Task Queue</h3>
+          <Badge variant="secondary" className="ml-auto font-mono text-[10px]">{tasks.length}</Badge>
+        </div>
+        {tasks.length > 0 ? (
+          <div className="divide-y divide-border/50">
+            {tasks.map((t) => (
+              <div key={t.id} className="flex items-center justify-between px-5 py-3 hover:bg-muted/30 transition-colors">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <span className={`flex h-1.5 w-1.5 rounded-full shrink-0 ${
+                    t.status === "running" ? "bg-blue-500 animate-pulse" :
+                    t.status === "pending" ? "bg-amber-500" :
+                    t.status === "done" ? "bg-emerald-500" :
+                    "bg-red-500"
+                  }`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium">{t.agentId}</p>
+                      <span className="text-[10px] text-muted-foreground capitalize">{t.status}</span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground/50 font-mono truncate" title={t.chatKey}>{t.chatKey}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  {t.duration != null ? (
+                    <span className="text-[11px] text-muted-foreground font-mono">{(t.duration / 1000).toFixed(1)}s</span>
+                  ) : null}
+                  {t.error ? (
+                    <span className="text-[10px] text-red-500 line-clamp-1 max-w-[200px]" title={t.error}>{t.error.slice(0, 40)}</span>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <p className="text-sm text-muted-foreground">No tasks in queue</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

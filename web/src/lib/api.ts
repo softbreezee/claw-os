@@ -1,3 +1,13 @@
+export interface TaskInfo {
+  id: string;
+  agentId: string;
+  chatKey: string;
+  status: string;
+  createdAt: string;
+  duration?: number;
+  error?: string;
+}
+
 export interface StatusResponse {
   configured: boolean;
   running: boolean;
@@ -165,6 +175,11 @@ export interface ConfigResponse {
 // Status
 export async function getStatus(): Promise<StatusResponse> {
   const res = await fetch("/api/status");
+  return res.json();
+}
+
+export async function getTasks(): Promise<TaskInfo[]> {
+  const res = await fetch("/api/tasks");
   return res.json();
 }
 
