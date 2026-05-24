@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // OpenAIProvider implements the Provider interface for OpenAI-compatible APIs.
@@ -36,7 +37,14 @@ func NewOpenAI(apiKey, apiBase, embedPath string) *OpenAIProvider {
 		apiKey:    apiKey,
 		apiBase:   apiBase,
 		embedPath: embedPath,
-		client:    &http.Client{},
+		client: &http.Client{
+			Timeout: 0,
+			Transport: &http.Transport{
+				TLSHandshakeTimeout:   20 * time.Second,
+				ResponseHeaderTimeout: 30 * time.Second,
+				ExpectContinueTimeout: 5 * time.Second,
+			},
+		},
 	}
 }
 
