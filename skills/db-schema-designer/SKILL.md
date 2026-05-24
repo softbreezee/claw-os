@@ -1,5 +1,6 @@
 ---
 name: db-schema-designer
+tags: [dev, tool, database]
 description: Design, create, inspect, and manage PostgreSQL tables for research and analysis data. Use when the user wants to store structured research results, asks to create a table, wants to see what tables exist, needs to understand the database schema, or wants to query/update research data.
 metadata:
   fastclaw:

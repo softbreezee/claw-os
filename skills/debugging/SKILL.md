@@ -1,6 +1,7 @@
 ---
 name: debugging
 description: 系统化调试流程。当用户提到调试、bug排查、问题诊断、错误修复、故障排除时触发此技能。
+tags: [dev, tool, troubleshooting]
 metadata:
   fastclaw:
     emoji: "🐛"

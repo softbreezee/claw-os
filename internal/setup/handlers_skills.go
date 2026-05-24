@@ -31,6 +31,7 @@ type skillInfo struct {
 	Location    string `json:"location"`
 	Type        string `json:"type"`            // layer: "builtin" | "user" | "agent"
 	Builtin     bool   `json:"builtin"`         // convenience flag for the UI
+	Agents      []string `json:"agents,omitempty"`
 	Owner       string `json:"owner,omitempty"` // agent id when scoped to one
 	// Kind comes from the SKILL.md frontmatter `type:` field. Common
 	// values seen in the wild: "skill" (atomic), "protocol" (multi-step
@@ -38,6 +39,7 @@ type skillInfo struct {
 	// The UI uses this to badge orchestrator-style skills differently
 	// from atomic capability skills.
 	Kind string `json:"kind,omitempty"`
+	Tags []string `json:"tags,omitempty"`
 }
 
 func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +89,17 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 		sk.Builtin = true
 		seen[sk.Name] = true
 		out = append(out, sk)
+	}
+
+	// Inject scope from config for each skill
+	cfg, cfgErr := config.Load()
+	if cfgErr == nil && cfg.Skills.Entries != nil {
+		for i := range out {
+			if entry, ok := cfg.Skills.Entries[out[i].Name]; ok {
+				out[i].Agents = entry.Agents
+				out[i].Tags = entry.Tags
+			}
+		}
 	}
 
 	if out == nil {
@@ -197,6 +210,7 @@ func scanSkillsDir(dir, layer string) []skillInfo {
 				Location:    path,
 				Type:        layer,
 				Kind:        skillKind(skillFile),
+				Tags:        skillTags(skillFile),
 			})
 			continue
 		}
@@ -213,6 +227,7 @@ func scanSkillsDir(dir, layer string) []skillInfo {
 			Location:    path,
 			Type:        layer,
 			Kind:        skillKind(path),
+			Tags:        skillTags(path),
 		})
 	}
 	return out
@@ -241,6 +256,26 @@ func skillKind(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(fm.Type)
+}
+
+// skillTags reads the YAML frontmatter `tags:` field. Returns nil when
+// no tags are defined.
+func skillTags(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	frontmatter, _ := splitFrontmatter(data)
+	if frontmatter == "" {
+		return nil
+	}
+	var fm struct {
+		Tags []string `yaml:"tags"`
+	}
+	if err := yaml.Unmarshal([]byte(frontmatter), &fm); err != nil {
+		return nil
+	}
+	return fm.Tags
 }
 
 // firstNonHeadingLine returns a one-line description for the skill.

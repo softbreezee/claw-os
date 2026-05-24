@@ -201,12 +201,29 @@ func (sl *SkillsLoader) LoadSkills() []Skill {
 		}
 	}
 
-	// Apply gating and env injection
+	// Apply gating, agent filter, and env injection
 	result := make([]Skill, 0, len(skills))
 	for _, s := range skills {
 		if s.Gated {
 			slog.Debug("skill gated", "name", s.Name, "reason", s.GateReason)
 			continue
+		}
+		// Filter by agent assignment: if the global config entry has non-empty
+		// Agents, only load when this agentID is in the list.
+		if sl.agentID != "" {
+			if entry, ok := sl.globalCfg.Entries[s.Name]; ok && len(entry.Agents) > 0 {
+				allowed := false
+				for _, a := range entry.Agents {
+					if a == sl.agentID {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					slog.Debug("skill filtered by agent", "skill", s.Name, "agent", sl.agentID, "assigned_to", entry.Agents)
+					continue
+				}
+			}
 		}
 		result = append(result, s)
 	}

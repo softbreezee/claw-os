@@ -75,14 +75,12 @@ export interface SkillInfo {
   name: string;
   description: string;
   location: string;
-  type: string;     // layer: "builtin" | "user" | "agent"
-  builtin?: boolean; // true when shipped with the binary
-  // Set when the skill lives in an agent workspace; absent for shared skills.
+  type: string;
+  builtin?: boolean;
+  agents?: string[];
   owner?: string;
-  // From SKILL.md frontmatter `type:` — "skill" | "protocol" | "suite" | "" (empty = atomic).
-  // Drives the Skills page badge: "protocol" / "suite" surface as
-  // distinct labels so users can spot orchestrators at a glance.
   kind?: string;
+  tags?: string[];
 }
 
 export interface PluginInfo {
@@ -543,6 +541,17 @@ export async function deleteSkill(name: string) {
 //   scope: "agent:<id>"  – ~/.pawnix/agents/<id>/agent/skills/
 // Builtin skills cannot be moved (immutable; create a same-named override
 // in user/ or an agent workspace to take precedence at runtime).
+export async function updateSkillScope(name: string, agents: string[], tags?: string[]): Promise<{ ok: boolean; error?: string }> {
+  const body: Record<string, unknown> = { agents };
+  if (tags !== undefined) body.tags = tags;
+  const res = await fetch(`/api/skills/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
 export async function moveSkill(name: string, scope: string): Promise<{ ok: boolean; location?: string; error?: string }> {
   const res = await fetch(`/api/skills/${encodeURIComponent(name)}/move`, {
     method: "POST",

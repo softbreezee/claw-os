@@ -355,6 +355,8 @@ type SkillsInstallCfg struct {
 // SkillEntryCfg is per-skill configuration.
 type SkillEntryCfg struct {
 	Enabled bool              `json:"enabled"`
+	Agents  []string          `json:"agents,omitempty"`
+	Tags    []string          `json:"tags,omitempty"`
 	APIKey  string            `json:"apiKey,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 }
