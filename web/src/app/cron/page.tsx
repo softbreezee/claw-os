@@ -364,6 +364,9 @@ export default function CronPage() {
                       <ChannelIcon className={`h-3.5 w-3.5 mt-0.5 shrink-0 ${channelColor(job.channel)}`} />
                       <div className="flex flex-col">
                         <span className="text-sm">{channelDisplayName(job.channel)}</span>
+                        {job.channel && job.channel !== "web" && (
+                          <span className="text-[10px] text-muted-foreground/50 leading-tight">+ Inbox</span>
+                        )}
                         {job.chatId && (
                           <span className="text-[10px] text-muted-foreground font-mono leading-tight">
                             {job.accountId ? `${job.accountId} → ` : ""}{job.chatId}

@@ -105,13 +105,13 @@ func (d *DBStore) cronJobsMigrationSQL() []string {
 			channel TEXT NOT NULL,
 			chat_id TEXT NOT NULL,
 			account_id TEXT NOT NULL DEFAULT '',
-			timezone TEXT NOT NULL DEFAULT 'UTC',
+			timezone TEXT NOT NULL DEFAULT 'Local',
 			enabled BOOLEAN NOT NULL DEFAULT true,
-			last_run TIMESTAMP,
-			next_run TIMESTAMP,
+			last_run TIMESTAMPTZ,
+			next_run TIMESTAMPTZ,
 			locked_by TEXT,
-			locked_at TIMESTAMP,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			locked_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_cron_jobs_schedule ON cron_jobs (tenant_id, enabled, next_run)`,
 	}
@@ -198,13 +198,13 @@ func (d *DBStore) migrationSQL() []string {
 			channel TEXT NOT NULL,
 			chat_id TEXT NOT NULL,
 			account_id TEXT NOT NULL DEFAULT '',
-			timezone TEXT NOT NULL DEFAULT 'UTC',
+			timezone TEXT NOT NULL DEFAULT 'Local',
 			enabled BOOLEAN NOT NULL DEFAULT true,
-			last_run TIMESTAMP,
-			next_run TIMESTAMP,
+			last_run TIMESTAMPTZ,
+			next_run TIMESTAMPTZ,
 			locked_by TEXT,
-			locked_at TIMESTAMP,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			locked_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_cron_jobs_schedule ON cron_jobs (tenant_id, enabled, next_run)`,
 		`CREATE TABLE IF NOT EXISTS chat_tasks (

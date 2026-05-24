@@ -28,6 +28,12 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 
 	// Register pgvector codec for every new connection.
 	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		// Set session timezone so TIMESTAMPTZ reads return local wall-clock.
+		// Without this, pgx maps UTC-zero times back as UTC, and cron
+		// next-runs show 8h off in Asia/Shanghai.
+		if _, err := conn.Exec(ctx, "SET timezone = 'Asia/Shanghai'"); err != nil {
+			return fmt.Errorf("pg: set timezone: %w", err)
+		}
 		return pgxvector.RegisterTypes(ctx, conn)
 	}
 

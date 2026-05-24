@@ -37,10 +37,10 @@ func jobToJSON(j store.CronJobRecord) map[string]any {
 		"createdAt": j.CreatedAt.Format(time.RFC3339),
 	}
 	if j.LastRun != nil {
-		out["lastRun"] = j.LastRun.Format(time.RFC3339)
+		out["lastRun"] = j.LastRun.In(time.Local).Format(time.RFC3339)
 	}
 	if j.NextRun != nil {
-		out["nextRun"] = j.NextRun.Format(time.RFC3339)
+		out["nextRun"] = j.NextRun.In(time.Local).Format(time.RFC3339)
 	}
 	return out
 }
