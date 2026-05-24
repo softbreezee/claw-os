@@ -131,6 +131,12 @@ type MemoryCfg struct {
 	// pulls in per turn (default 5). Tune down if your prompt budget
 	// is tight, up if you have very many small facts.
 	SemanticTopK int `json:"semanticTopK,omitempty"`
+	// MaxHistoryTurns caps the number of user+assistant turns sent
+	// to the LLM per request. Older turns are captured by vector
+	// memory through embeddings, so the LLM can recall relevant
+	// history without re-reading the full raw session.
+	// Default 10. Set to 0 for unlimited.
+	MaxHistoryTurns int `json:"maxHistoryTurns,omitempty"`
 	// SemanticByteCap is the hard byte ceiling for the joined Relevant
 	// Memory block — past this, the section is truncated. Defaults to
 	// 1024 bytes (~256 tokens) which keeps the prompt overhead bounded

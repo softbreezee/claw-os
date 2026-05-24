@@ -648,6 +648,29 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 
 	// Context compaction: check if session messages are too large
 	sessionMsgs := sess.GetMessages()
+	// Sliding window: keep only the last N user/assistant exchanges.
+	// Older context is captured by semantic memory (pgvector) and
+	// already injected into the system prompt as Relevant Memory.
+	// This prevents context bloat from long Discord/chat sessions.
+	maxHistory := a.memoryCfg.MaxHistoryTurns
+	if maxHistory <= 0 {
+		maxHistory = 10
+	}
+	cutoff := len(sessionMsgs)
+	for i := len(sessionMsgs) - 1; i >= 0; i-- {
+		m := sessionMsgs[i]
+		if m.Role == "user" || m.Role == "assistant" {
+			maxHistory--
+			if maxHistory < 0 {
+				cutoff = i + 1
+				break
+			}
+		}
+	}
+	if cutoff > 0 {
+		sessionMsgs = sessionMsgs[cutoff:]
+	}
+
 	compactResult, err := CompactMessages(ctx, sessionMsgs, systemPrompt, a.workspacePath, a.getProvider(), a.model)
 	if err != nil {
 		slog.Warn("compaction error", "agent", a.name, "error", err)
