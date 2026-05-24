@@ -250,6 +250,7 @@ export default function CronPage() {
       channel: editJob.channel,
       chatId: editJob.chatId,
       name: editJob.name,
+      message: editJob.message,
     });
     setEditJob(null);
     setSaving(false);
@@ -341,8 +342,8 @@ export default function CronPage() {
                 <TableHead>Delivery</TableHead>
                 <TableHead>Last Run</TableHead>
                 <TableHead>Next Run</TableHead>
-                <TableHead>Enabled</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead className="sticky right-[120px] w-[80px] bg-card z-20 border-l border-border">Enabled</TableHead>
+                <TableHead className="sticky right-0 w-[120px] bg-card z-20 text-right border-l border-border">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -404,13 +405,13 @@ export default function CronPage() {
                       {formatRunTime(job.nextRun)}
                     </span>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="sticky right-[120px] w-[80px] bg-card z-10 border-l border-border">
                     <Switch
                       checked={job.enabled}
                       onCheckedChange={() => handleToggle(job)}
                     />
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="sticky right-0 w-[120px] bg-card z-10 text-right border-l border-border">
                     <div className="flex items-center justify-end gap-1">
                       <Button
                         variant="ghost"
@@ -566,7 +567,7 @@ export default function CronPage() {
       {/* Delete Confirmation */}
       {/* Edit Dialog */}
       <Dialog open={!!editJob} onOpenChange={(o) => { if (!o) setEditJob(null); }}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit {editJob?.name}</DialogTitle>
           </DialogHeader>
@@ -601,6 +602,18 @@ export default function CronPage() {
             <div className="space-y-1.5">
               <Label>Chat ID</Label>
               <Input value={editJob?.chatId || ""} onChange={(e) => setEditJob((j) => j ? { ...j, chatId: e.target.value } : j)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Message（触发指令）</Label>
+              <Textarea
+                value={editJob?.message || ""}
+                onChange={(e) => setEditJob((j) => j ? { ...j, message: e.target.value } : j)}
+                rows={6}
+                className="resize-none font-mono text-sm"
+              />
+              <p className="text-xs text-muted-foreground">
+                定时触发时，这条指令会作为 prompt 直接发给 Agent。建议写清楚具体任务步骤。
+              </p>
             </div>
           </div>
           <DialogFooter>
