@@ -131,6 +131,18 @@ func (d *Discord) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCrea
 		text = strings.ReplaceAll(text, "<@!"+u.ID+">", "@"+u.Username)
 	}
 
+	// Discord sends empty content for image-only messages. Provide a
+	// placeholder so LLMs that require non-empty user messages (like
+	// Kimi) don't reject the request with "must not be empty".
+	if text == "" && len(m.Attachments) > 0 {
+		var names []string
+		for _, a := range m.Attachments {
+			names = append(names, a.Filename)
+		}
+		suffix := strings.Join(names, ", ")
+		text = "[用户发送了文件: " + suffix + "]"
+	}
+
 	slog.Info("discord message received",
 		"from", m.Author.Username,
 		"channel_id", m.ChannelID,
