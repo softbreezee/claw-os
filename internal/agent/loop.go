@@ -648,27 +648,41 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 
 	// Context compaction: check if session messages are too large
 	sessionMsgs := sess.GetMessages()
-	// Sliding window: keep only the last N user/assistant exchanges.
-	// Older context is captured by semantic memory (pgvector) and
-	// already injected into the system prompt as Relevant Memory.
-	// This prevents context bloat from long Discord/chat sessions.
-	maxHistory := a.memoryCfg.MaxHistoryTurns
-	if maxHistory <= 0 {
-		maxHistory = 10
-	}
-	cutoff := len(sessionMsgs)
-	for i := len(sessionMsgs) - 1; i >= 0; i-- {
-		m := sessionMsgs[i]
-		if m.Role == "user" || m.Role == "assistant" {
-			maxHistory--
-			if maxHistory < 0 {
-				cutoff = i + 1
-				break
+
+	// Long-running channels (Discord, Telegram) accumulate unbounded
+	// history — every message ever sent in the channel stays in the
+	// session. After 50+ turns, sending the full transcript to the LLM
+	// is slow, expensive, and redundant (vector memory already captures
+	// the key facts via embeddings).
+	//
+	// Web sessions ("web" channel) get a fresh session per conversation
+	// so they skip this window and keep the original behaviour (full
+	// transcript + compaction when over the token budget).
+	if msg.Channel != "web" {
+		maxHistory := a.memoryCfg.MaxHistoryTurns
+		if maxHistory <= 0 {
+			maxHistory = 10
+		}
+		// Keep only the last N user turns (plus everything after them:
+		// assistant replies, tool calls, tool results). This ensures
+		// tool_call ↔ tool_result pairs are never split.
+		keep := len(sessionMsgs)
+		seen := 0
+		for i := len(sessionMsgs) - 1; i >= 0; i-- {
+			if sessionMsgs[i].Role == "user" {
+				seen++
+				if seen > maxHistory {
+					keep = i + 1
+					break
+				}
 			}
 		}
-	}
-	if cutoff > 0 {
-		sessionMsgs = sessionMsgs[cutoff:]
+		if keep < len(sessionMsgs) {
+			// Persist the truncation so base64 blobs from old image
+			// attachments don't accumulate in PG/jsonl forever.
+			sess.ReplaceMessages(sessionMsgs[keep:])
+			sessionMsgs = sessionMsgs[keep:]
+		}
 	}
 
 	compactResult, err := CompactMessages(ctx, sessionMsgs, systemPrompt, a.workspacePath, a.getProvider(), a.model)
@@ -1097,6 +1111,31 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 	sess.Append(userMsg)
 
 	sessionMsgs := sess.GetMessages()
+
+	// Sliding window for long-running channels — same as the
+	// non-stream path above.
+	if msg.Channel != "web" {
+		maxHistory := a.memoryCfg.MaxHistoryTurns
+		if maxHistory <= 0 {
+			maxHistory = 10
+		}
+		keep := len(sessionMsgs)
+		seen := 0
+		for i := len(sessionMsgs) - 1; i >= 0; i-- {
+			if sessionMsgs[i].Role == "user" {
+				seen++
+				if seen > maxHistory {
+					keep = i + 1
+					break
+				}
+			}
+		}
+		if keep < len(sessionMsgs) {
+			sess.ReplaceMessages(sessionMsgs[keep:])
+			sessionMsgs = sessionMsgs[keep:]
+		}
+	}
+
 	compactResult, err := CompactMessages(ctx, sessionMsgs, systemPrompt, a.workspacePath, a.getProvider(), a.model)
 	if err != nil {
 		slog.Warn("compaction error", "agent", a.name, "error", err)
