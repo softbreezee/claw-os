@@ -2,7 +2,11 @@ package channels
 
 import (
 	"context"
+	"io"
 	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -131,16 +135,55 @@ func (d *Discord) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCrea
 		text = strings.ReplaceAll(text, "<@!"+u.ID+">", "@"+u.Username)
 	}
 
-	// Discord sends empty content for image-only messages. Provide a
-	// placeholder so LLMs that require non-empty user messages (like
-	// Kimi) don't reject the request with "must not be empty".
-	if text == "" && len(m.Attachments) > 0 {
-		var names []string
-		for _, a := range m.Attachments {
-			names = append(names, a.Filename)
+	// Download attachments from Discord so vision models can read them.
+	var attachments []bus.Attachment
+	for _, a := range m.Attachments {
+		// Only handle image attachments for now
+		if !strings.HasPrefix(a.ContentType, "image/") {
+			continue
 		}
-		suffix := strings.Join(names, ", ")
-		text = "[用户发送了文件: " + suffix + "]"
+		// Download to a temp file
+		resp, err := http.Get(a.URL)
+		if err != nil {
+			slog.Warn("discord: download attachment failed", "url", a.URL, "error", err)
+			continue
+		}
+		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			slog.Warn("discord: read attachment body failed", "error", err)
+			continue
+		}
+		// Save to a temp file the agent can read
+		f, err := os.CreateTemp("", "discord-upload-*"+filepath.Ext(a.Filename))
+		if err != nil {
+			slog.Warn("discord: create temp file failed", "error", err)
+			continue
+		}
+		if _, err := f.Write(data); err != nil {
+			f.Close()
+			continue
+		}
+		f.Close()
+		attachments = append(attachments, bus.Attachment{
+			Path:     f.Name(),
+			MimeType: a.ContentType,
+			Name:     a.Filename,
+			Size:     int64(len(data)),
+		})
+	}
+
+	// Discord sends empty content for image-only messages.
+	if text == "" && len(m.Attachments) > 0 {
+		if len(attachments) > 0 {
+			text = "[用户发送了图片: " + attachments[0].Name + "]"
+		} else {
+			var names []string
+			for _, a := range m.Attachments {
+				names = append(names, a.Filename)
+			}
+			text = "[用户发送了文件: " + strings.Join(names, ", ") + "]"
+		}
 	}
 
 	slog.Info("discord message received",
@@ -149,6 +192,8 @@ func (d *Discord) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCrea
 		"guild_id", m.GuildID,
 		"peer_kind", peerKind,
 		"is_bot", isBot,
+		"content_len", len(text),
+		"attachments", len(m.Attachments),
 	)
 
 	d.bus.Inbound <- bus.InboundMessage{
@@ -162,5 +207,6 @@ func (d *Discord) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCrea
 		SenderName:   m.Author.Username,
 		Mentions:     mentions,
 		IsBotMessage: isBot,
+		Attachments:  attachments,
 	}
 }
