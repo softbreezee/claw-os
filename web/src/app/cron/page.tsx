@@ -249,6 +249,7 @@ export default function CronPage() {
       agentId: editJob.agentId,
       channel: editJob.channel,
       chatId: editJob.chatId,
+      name: editJob.name,
     });
     setEditJob(null);
     setSaving(false);
@@ -589,6 +590,13 @@ export default function CronPage() {
                   <SelectItem value="web">Web / Inbox</SelectItem>
                 </SelectContent>
               </Select>
+              {editJob?.channel && editJob.channel !== "web" && (
+                <p className="text-[11px] text-muted-foreground/50">Results always arrive in Inbox too</p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label>Name</Label>
+              <Input value={editJob?.name || ""} onChange={(e) => setEditJob((j) => j ? { ...j, name: e.target.value } : j)} />
             </div>
             <div className="space-y-1.5">
               <Label>Chat ID</Label>

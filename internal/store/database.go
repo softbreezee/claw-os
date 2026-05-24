@@ -606,7 +606,7 @@ func (d *DBStore) SaveCronJob(ctx context.Context, tenantID string, job *CronJob
 		_, err := d.db.ExecContext(ctx,
 			`INSERT INTO cron_jobs (id, tenant_id, agent_id, name, type, schedule, message, channel, chat_id, account_id, timezone, enabled, last_run, next_run, created_at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-			 ON CONFLICT (id) DO UPDATE SET name=$4, type=$5, schedule=$6, message=$7, channel=$8, chat_id=$9, account_id=$10, timezone=$11, enabled=$12, last_run=$13, next_run=$14`,
+			 ON CONFLICT (id) DO UPDATE SET agent_id=$3, name=$4, type=$5, schedule=$6, message=$7, channel=$8, chat_id=$9, account_id=$10, timezone=$11, enabled=$12, last_run=$13, next_run=$14`,
 			job.ID, tenantID, job.AgentID, job.Name, job.Type, job.Schedule, job.Message, job.Channel, job.ChatID, job.AccountID, job.Timezone, job.Enabled, job.LastRun, job.NextRun, now)
 		return err
 	}
