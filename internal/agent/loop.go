@@ -678,7 +678,20 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// the current time, channel, and chat ID regardless of conversation length.
 	messages = append(messages, provider.Message{Role: "user", Content: runtimeCtx})
 	messages = append(messages, provider.Message{Role: "assistant", Content: "Understood."})
-	messages = append(messages, sessionMsgs...)
+
+	// Filter empty user/assistant messages before building LLM request.
+	// Discord images arrive with empty text which gets fixed to a placeholder
+	// upstream, but sessions from before the fix may still contain empty messages
+	// that cause 400 errors from strict providers (Kimi, etc).
+	for _, m := range sessionMsgs {
+		if m.Role == "user" && m.Content == "" && len(m.ContentParts) == 0 {
+			continue // skip empty user messages
+		}
+		if m.Role == "assistant" && m.Content == "" && len(m.ToolCalls) == 0 {
+			continue // skip empty assistant messages
+		}
+		messages = append(messages, m)
+	}
 
 	toolDefs := a.registry.Definitions()
 
