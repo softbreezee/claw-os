@@ -142,7 +142,13 @@ func (s *Server) handleUpdateCronJob(w http.ResponseWriter, r *http.Request) {
 	// Currently only `enabled` is mutable from the UI. Schedule edits
 	// are delete + recreate to keep the audit trail simple.
 	var req struct {
-		Enabled *bool `json:"enabled,omitempty"`
+		Enabled   *bool  `json:"enabled,omitempty"`
+		AgentID   string `json:"agentId,omitempty"`
+		Channel   string `json:"channel,omitempty"`
+		ChatID    string `json:"chatId,omitempty"`
+		Schedule  string `json:"schedule,omitempty"`
+		Name      string `json:"name,omitempty"`
+		Message   string `json:"message,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest,
@@ -154,6 +160,27 @@ func (s *Server) handleUpdateCronJob(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusNotFound,
 			map[string]any{"ok": false, "error": "job not found"})
 		return
+	}
+	if req.AgentID != "" {
+		rec.AgentID = req.AgentID
+	}
+	if req.Channel != "" {
+		rec.Channel = req.Channel
+	}
+	if req.ChatID != "" {
+		rec.ChatID = req.ChatID
+	}
+	if req.Schedule != "" {
+		rec.Schedule = req.Schedule
+		now := time.Now()
+		next := cron.ComputeNextRun(rec.Type, rec.Schedule, now)
+		rec.NextRun = &next
+	}
+	if req.Name != "" {
+		rec.Name = req.Name
+	}
+	if req.Message != "" {
+		rec.Message = req.Message
 	}
 	if req.Enabled != nil {
 		rec.Enabled = *req.Enabled

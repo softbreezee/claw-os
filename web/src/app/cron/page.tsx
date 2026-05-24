@@ -41,7 +41,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Clock, Inbox, Play, Plus, Send, Hash, MessageCircle, Trash2 } from "lucide-react";
+import { Clock, Inbox, Pencil, Play, Plus, Send, Hash, MessageCircle, Trash2 } from "lucide-react";
 import {
   getCronJobs,
   createCronJob,
@@ -157,6 +157,7 @@ export default function CronPage() {
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [editJob, setEditJob] = useState<CronJobInfo | null>(null);
   const [saving, setSaving] = useState(false);
 
   const [newName, setNewName] = useState("");
@@ -234,6 +235,23 @@ export default function CronPage() {
     await runCronJobNow(job.id);
     // Bump the next-run column visually right away — the actual fire
     // happens within ~60s when the scheduler's poll loop ticks.
+    fetchData();
+  };
+
+  const handleEdit = (job: CronJobInfo) => {
+    setEditJob({ ...job });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editJob) return;
+    setSaving(true);
+    await updateCronJob(editJob.id, {
+      agentId: editJob.agentId,
+      channel: editJob.channel,
+      chatId: editJob.chatId,
+    });
+    setEditJob(null);
+    setSaving(false);
     fetchData();
   };
 
@@ -397,6 +415,15 @@ export default function CronPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-muted-foreground hover:text-primary"
+                        title="Edit"
+                        onClick={() => handleEdit(job)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-primary"
                         title="Run now (fires on next scheduler poll, within 60s)"
                         onClick={() => handleRunNow(job)}
                       >
@@ -536,6 +563,45 @@ export default function CronPage() {
       </Dialog>
 
       {/* Delete Confirmation */}
+      {/* Edit Dialog */}
+      <Dialog open={!!editJob} onOpenChange={(o) => { if (!o) setEditJob(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit {editJob?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label>Agent</Label>
+              <Select value={editJob?.agentId || ""} onValueChange={(v) => v && setEditJob((j) => j ? { ...j, agentId: v } : j)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {agents.map((a) => <SelectItem key={a.id} value={a.id}>{a.id}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Channel</Label>
+              <Select value={editJob?.channel || ""} onValueChange={(v) => v && setEditJob((j) => j ? { ...j, channel: v } : j)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="discord">Discord</SelectItem>
+                  <SelectItem value="telegram">Telegram</SelectItem>
+                  <SelectItem value="web">Web / Inbox</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Chat ID</Label>
+              <Input value={editJob?.chatId || ""} onChange={(e) => setEditJob((j) => j ? { ...j, chatId: e.target.value } : j)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditJob(null)}>Cancel</Button>
+            <Button onClick={handleSaveEdit} disabled={saving}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <AlertDialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
