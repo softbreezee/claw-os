@@ -36,11 +36,18 @@ const maxMultipartMemory = 32 * 1024 * 1024
 // agent's persistent config is unchanged. The override is read by
 // agent.effectiveModel at every primary LLM call site, so it covers
 // both the ReAct loop and the final streaming response.
+//
+// DeliverToChannel / DeliverToChatID specify an additional delivery target
+// for the agent's reply. When non-empty, the task runner sends the reply to
+// this channel/chatID after the web stream completes. Used for cross-channel
+// mirroring (e.g. reply in Web UI → also appear in Discord).
 type chatSubmitRequest struct {
-	AgentID   string `json:"agentId"`
-	SessionID string `json:"sessionId"`
-	Message   string `json:"message"`
-	Model     string `json:"model,omitempty"`
+	AgentID          string `json:"agentId"`
+	SessionID        string `json:"sessionId"`
+	Message          string `json:"message"`
+	Model            string `json:"model,omitempty"`
+	DeliverToChannel string `json:"deliverToChannel,omitempty"`
+	DeliverToChatID  string `json:"deliverToChatId,omitempty"`
 }
 
 // chatTaskWired returns true iff the async runtime is fully configured.
@@ -113,8 +120,10 @@ func (s *Server) handleChatSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	taskID, err := s.chatRunner.SubmitWithOptions(r.Context(), req.AgentID, req.SessionID, req.Message, taskrunner.SubmitOptions{
-		ModelOverride: req.Model,
-		Attachments:   attachments,
+		ModelOverride:    req.Model,
+		Attachments:      attachments,
+		DeliverToChannel: req.DeliverToChannel,
+		DeliverToChatID:  req.DeliverToChatID,
 	})
 	if err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})

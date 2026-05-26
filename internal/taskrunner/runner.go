@@ -51,6 +51,7 @@ type AgentResolver interface {
 // channel argument while it runs.
 type AgentHandle interface {
 	HandleWebChatStream(ctx context.Context, sessionID, text string, events chan<- agent.ChatEvent) string
+	SendToChat(ctx context.Context, channel, chatID, text string) error
 }
 
 // Runner is the package's main type. Construct with New, drive with
@@ -79,7 +80,7 @@ type Runner struct {
 	// and survive restarts; this map is just the (taskID -> file paths)
 	// binding that the runner pops on its way to executing the agent.
 	pendingAttachments map[string][]busmsg.Attachment
-
+	pendingDeliveries  map[string]deliveryTarget // taskID -> cross-channel delivery
 	// PR3: per-task ring buffer of recent events, keyed by taskID. Used
 	// by handlers to replay events to clients that missed them (e.g.
 	// after a network blip). historySize caps memory per task.
@@ -135,6 +136,7 @@ func New(s store.Store, bus eventbus.Bus, resolver AgentResolver, opts Options) 
 		inflight:           make(map[string]*runningTask),
 		pendingModels:      make(map[string]string),
 		pendingAttachments: make(map[string][]busmsg.Attachment),
+		pendingDeliveries:  make(map[string]deliveryTarget),
 		history:            make(map[string]*eventHistory),
 		historySize:        256, // ~256 events covers a full agent turn comfortably
 		rootCtx:            rootCtx,
@@ -226,9 +228,16 @@ func TopicFor(taskID string) string {
 // (agentID, sessionID, message) stay positional for callers that don't
 // need the extras; this struct is only used when something beyond the
 // vanilla text-only path is in play.
+type deliveryTarget struct {
+	channel string
+	chatID  string
+}
+
 type SubmitOptions struct {
-	ModelOverride string
-	Attachments   []busmsg.Attachment
+	ModelOverride     string
+	Attachments       []busmsg.Attachment
+	DeliverToChannel  string // cross-channel reply delivery target
+	DeliverToChatID   string
 }
 
 func (r *Runner) Submit(ctx context.Context, agentID, sessionID, message, modelOverride string) (string, error) {
@@ -252,6 +261,12 @@ func (r *Runner) SubmitWithOptions(ctx context.Context, agentID, sessionID, mess
 	}
 	if len(opts.Attachments) > 0 {
 		r.pendingAttachments[taskID] = opts.Attachments
+	}
+	if opts.DeliverToChannel != "" {
+		r.pendingDeliveries[taskID] = deliveryTarget{
+			channel: opts.DeliverToChannel,
+			chatID:  opts.DeliverToChatID,
+		}
 	}
 	r.mu.Unlock()
 
@@ -446,6 +461,21 @@ func (r *Runner) run(rec *store.ChatTaskRecord) {
 }
 
 func (r *Runner) finishOK(rec *store.ChatTaskRecord, result string) {
+	// Cross-channel delivery: if this web chat task had a Discord/Telegram
+	// delivery target, forward the reply there so both sides stay in sync.
+	r.mu.Lock()
+	dt, hasDelivery := r.pendingDeliveries[rec.ID]
+	delete(r.pendingDeliveries, rec.ID)
+	r.mu.Unlock()
+	if hasDelivery && result != "" {
+		agent := r.resolver.AgentByID(rec.AgentID)
+		if agent != nil {
+			if err := agent.SendToChat(context.Background(), dt.channel, dt.chatID, result); err != nil {
+				slog.Warn("taskrunner: cross-channel delivery failed", "channel", dt.channel, "chatID", dt.chatID, "err", err)
+			}
+		}
+	}
+
 	now := time.Now().UTC()
 	rec.Status = store.ChatTaskDone
 	rec.Result = result
