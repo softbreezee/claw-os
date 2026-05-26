@@ -21,6 +21,7 @@ type RemoteStore interface {
 	Save(ctx context.Context, agentID, channel, sessionID string, msgs []provider.Message) error
 	Delete(ctx context.Context, agentID, channel, sessionID string) error
 	ListWebSessions(ctx context.Context, agentID string) ([]map[string]string, error)
+	ListExternalSessions(ctx context.Context, agentID string) ([]map[string]string, error)
 }
 
 // Session holds the message history for a channel:chat_id pair.
@@ -262,6 +263,67 @@ func (s *Session) appendToFile(msg provider.Message) {
 }
 
 // ListWebSessions returns web chat sessions. Uses remote store when available.
+func (m *Manager) ListExternalSessions() []map[string]string {
+	if m.remote != nil {
+		sessions, err := m.remote.ListExternalSessions(context.Background(), m.agentID)
+		if err == nil {
+			return sessions
+		}
+	}
+	return m.listExternalSessionsFromFiles()
+}
+
+func (m *Manager) listExternalSessionsFromFiles() []map[string]string {
+	var sessions []map[string]string
+	// Read from the sessions directory for non-web files
+	entries, err := os.ReadDir(m.dataDir)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, "web_") {
+			continue
+		}
+		// Parse "discord_1504039153787076611.jsonl" → channel=discord, chatId=...
+		base := strings.TrimSuffix(name, ".jsonl")
+		parts := strings.SplitN(base, "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		ch := parts[0]
+		chatID := parts[1]
+		// Quick preview: first user message
+		preview := ""
+		f, err := os.Open(filepath.Join(m.dataDir, name))
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			var msg struct { Role, Content string }
+			if err := json.Unmarshal(scanner.Bytes(), &msg); err == nil && msg.Role == "user" && msg.Content != "" {
+				preview = msg.Content
+				break
+			}
+		}
+		f.Close()
+		if preview == "" {
+			continue
+		}
+		if len(preview) > 80 {
+			preview = preview[:80] + "..."
+		}
+		sessions = append(sessions, map[string]string{
+			"id":      ch + ":" + chatID,
+			"channel": ch,
+			"chatId":  chatID,
+			"preview": preview,
+		})
+	}
+	return sessions
+}
+
 func (m *Manager) ListWebSessions() []map[string]string {
 	if m.remote != nil {
 		sessions, err := m.remote.ListWebSessions(context.Background(), m.agentID)

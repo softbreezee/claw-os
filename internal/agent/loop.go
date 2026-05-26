@@ -424,6 +424,7 @@ type PGBackend struct {
 		Save(ctx context.Context, agentID, channel, sessionID string, msgs []provider.Message) error
 		Delete(ctx context.Context, agentID, channel, sessionID string) error
 		ListWebSessions(ctx context.Context, agentID string) ([]map[string]string, error)
+		ListExternalSessions(ctx context.Context, agentID string) ([]map[string]string, error)
 	}
 	// MemoryStore must support dual-write Insert AND semantic search,
 	// so the read path can pull the top-k most-relevant facts into
@@ -568,6 +569,71 @@ func (a *Agent) WebChatSessions() []map[string]string {
 // DeleteWebSession deletes a web chat session by session ID.
 func (a *Agent) DeleteWebSession(sessionId string) error {
 	return a.sessions.DeleteWebSession(sessionId)
+}
+
+// ExternalSessions returns non-web sessions (Discord, Telegram).
+func (a *Agent) ExternalSessions() []map[string]string {
+	return a.sessions.ListExternalSessions()
+}
+
+// ExternalSessionHistory returns messages for a non-web session.
+func (a *Agent) ExternalSessionHistory(channel, chatID string) []map[string]any {
+	sess := a.sessions.Get(channel, chatID)
+	msgs := sess.GetMessages()
+	var history []map[string]any
+	for _, m := range msgs {
+		switch m.Role {
+		case "user":
+			if m.Content == "" && len(m.ContentParts) == 0 {
+				continue
+			}
+			entry := map[string]any{
+				"role":    "user",
+				"content": m.Content,
+			}
+			history = append(history, entry)
+		case "assistant":
+			if m.Content == "" && len(m.ToolCalls) == 0 {
+				continue
+			}
+			entry := map[string]any{"role": "assistant"}
+			if m.Content != "" {
+				entry["content"] = m.Content
+			}
+			if len(m.ToolCalls) > 0 {
+				var calls []map[string]string
+				for _, tc := range m.ToolCalls {
+					calls = append(calls, map[string]string{
+						"id":        tc.ID,
+						"name":      tc.Function.Name,
+						"arguments": tc.Function.Arguments,
+					})
+				}
+				entry["toolCalls"] = calls
+			}
+			history = append(history, entry)
+		case "tool":
+			history = append(history, map[string]any{
+				"role":       "tool",
+				"content":    m.Content,
+				"name":       m.Name,
+				"toolCallId": m.ToolCallID,
+			})
+		}
+	}
+	return history
+}
+
+// SendToChat delivers a message to a specific channel/chatID.
+func (a *Agent) SendToChat(ctx context.Context, channel, chatID, text string) error {
+	a.messageBus.Inbound <- bus.InboundMessage{
+		Channel:  channel,
+		ChatID:   chatID,
+		Text:     text,
+		PeerKind: "dm",
+		Origin:   "internal",
+	}
+	return nil
 }
 
 // Model returns the agent's model name.

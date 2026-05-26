@@ -17,7 +17,10 @@ import {
   openWorkspace,
   getSessionContextInfo,
   getSessionSystemPrompt,
+  getExternalSessions,
+  getExternalHistory,
   type AgentInfo,
+  type ExternalSession,
   type ChatAttachment,
   type ChatHistoryMessage,
   type ChatStreamEvent,
@@ -55,6 +58,7 @@ import {
   Sparkles,
   Eye,
   FileCode,
+  Radio,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -234,6 +238,8 @@ export default function ChatPage() {
   const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [sessionId, setSessionId] = useState<string>(() => generateSessionId());
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [externSessions, setExternSessions] = useState<ExternalSession[]>([]);
+  const [externChannel, setExternChannel] = useState<string | null>(null); // "discord:chatId" when viewing external
   // All per-(agent, session) runtime state lives in this map. The currently
   // visible tab is just a selector view over it. This is the structural fix
   // that allows multiple agents to stream concurrently without their states
@@ -395,6 +401,9 @@ export default function ChatPage() {
     getChatSessions(agentId)
       .then((list) => setSessions(list || []))
       .catch(() => setSessions([]));
+    getExternalSessions(agentId)
+      .then((list) => setExternSessions(list || []))
+      .catch(() => setExternSessions([]));
   }, []);
 
   useEffect(() => {
@@ -941,6 +950,36 @@ export default function ChatPage() {
               </div>
             ))}
           </div>
+
+          {/* External sessions (Discord, Telegram) */}
+          {externSessions.length > 0 && (
+            <div className="flex flex-col min-h-0 border-t border-border pt-1">
+              <div className="px-4 pt-3 pb-2">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                  Channels
+                </p>
+              </div>
+              <div className="overflow-y-auto px-2 pb-2 space-y-0.5 max-h-48">
+                {externSessions.map((es) => (
+                  <div
+                    key={es.id}
+                    className={`group flex w-full items-center gap-1.5 rounded-lg px-3 py-2 text-sm transition-colors cursor-pointer ${
+                      externChannel === es.id
+                        ? "bg-primary/10 text-primary"
+                        : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                    }`}
+                    onClick={() => setExternChannel(es.id)}
+                  >
+                    <Radio className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                    <div className="flex-1 min-w-0">
+                      <p className="truncate text-xs font-medium">{es.channel}</p>
+                      <p className="truncate text-[10px] text-muted-foreground/60">{es.preview}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </aside>
 

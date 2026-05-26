@@ -279,6 +279,23 @@ export async function getChatSessions(agentId: string): Promise<{ id: string; pr
   return res.json();
 }
 
+export interface ExternalSession {
+  id: string;       // "discord:15040..."
+  channel: string;  // "discord" | "telegram"
+  chatId: string;   // channel-specific chat/group ID
+  preview: string;  // first user message
+}
+
+export async function getExternalSessions(agentId: string): Promise<ExternalSession[]> {
+  const res = await fetch(`/api/chat/external-sessions?agentId=${encodeURIComponent(agentId)}`);
+  return res.json();
+}
+
+export async function getExternalHistory(agentId: string, channel: string, chatId: string): Promise<ChatHistoryMessage[]> {
+  const res = await fetch(`/api/chat/external-history?agentId=${encodeURIComponent(agentId)}&channel=${encodeURIComponent(channel)}&chatId=${encodeURIComponent(chatId)}`);
+  return res.json();
+}
+
 export async function sendChat(agentId: string, sessionId: string, message: string): Promise<{ response: string }> {
   const res = await fetch("/api/chat", {
     method: "POST",

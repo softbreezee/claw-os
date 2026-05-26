@@ -113,5 +113,52 @@ func (s *SessionStore) ListWebSessions(ctx context.Context, agentID string) ([]m
 	return result, nil
 }
 
+// ListExternalSessions returns non-web sessions for an agent.
+func (s *SessionStore) ListExternalSessions(ctx context.Context, agentID string) ([]map[string]string, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT session_id, channel, messages FROM sessions
+		 WHERE agent_id = $1 AND channel != 'web'
+		 ORDER BY updated_at DESC`,
+		agentID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("pg: list external sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var result []map[string]string
+	for rows.Next() {
+		var sid, ch string
+		var raw []byte
+		if err := rows.Scan(&sid, &ch, &raw); err != nil {
+			continue
+		}
+		var msgs []provider.Message
+		if err := json.Unmarshal(raw, &msgs); err != nil {
+			continue
+		}
+		preview := ""
+		for _, m := range msgs {
+			if m.Role == "user" && m.Content != "" {
+				preview = m.Content
+				if len(preview) > 80 {
+					preview = preview[:80] + "..."
+				}
+				break
+			}
+		}
+		if preview == "" {
+			continue
+		}
+		result = append(result, map[string]string{
+			"id":      ch + ":" + sid,
+			"channel": ch,
+			"chatId":  sid,
+			"preview": preview,
+		})
+	}
+	return result, nil
+}
+
 // LogUnused suppresses the unused import warning during development.
 var _ = slog.Info

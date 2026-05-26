@@ -65,6 +65,13 @@ type AgentHandle interface {
 	// UI can render images the agent produced and so the user can pop
 	// it open in their OS file explorer.
 	WorkspacePath() string
+	// ExternalSessions returns sessions for non-web channels (Discord, Telegram).
+	// Each entry: {"id":"discord:1504...", "channel":"discord", "chatId":"...", "preview":"..."}.
+	ExternalSessions() []map[string]string
+	// ExternalSessionHistory returns messages for a non-web session.
+	ExternalSessionHistory(channel, chatID string) []map[string]any
+	// SendToChat delivers a message to a specific channel/chatID (for cross-channel replies).
+	SendToChat(ctx context.Context, channel, chatID, text string) error
 }
 
 // AgentProvider gives the server access to the running agents.
@@ -181,6 +188,8 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/chat/tasks/{id}/cancel", s.handleChatTaskCancel)
 	mux.HandleFunc("GET /api/chat/history", s.handleChatHistory)
 	mux.HandleFunc("GET /api/chat/sessions", s.handleChatSessions)
+	mux.HandleFunc("GET /api/chat/external-sessions", s.handleExternalSessions)
+	mux.HandleFunc("GET /api/chat/external-history", s.handleExternalHistory)
 	mux.HandleFunc("DELETE /api/chat/sessions", s.handleDeleteChatSession)
 	mux.HandleFunc("GET /api/chat/context-info", s.handleChatContextInfo)
 	mux.HandleFunc("GET /api/chat/system-prompt", s.handleChatSystemPrompt)

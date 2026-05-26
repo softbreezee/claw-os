@@ -395,6 +395,52 @@ func (s *Server) handleChatSystemPrompt(w http.ResponseWriter, r *http.Request) 
 	jsonResponse(w, http.StatusOK, info)
 }
 
+func (s *Server) handleExternalSessions(w http.ResponseWriter, r *http.Request) {
+	if s.agentProvider == nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+	agentID := r.URL.Query().Get("agentId")
+	if agentID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "agentId required"})
+		return
+	}
+	ag := s.agentProvider.AgentByID(agentID)
+	if ag == nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+	sessions := ag.ExternalSessions()
+	if sessions == nil {
+		sessions = []map[string]string{}
+	}
+	jsonResponse(w, http.StatusOK, sessions)
+}
+
+func (s *Server) handleExternalHistory(w http.ResponseWriter, r *http.Request) {
+	if s.agentProvider == nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+	agentID := r.URL.Query().Get("agentId")
+	channel := r.URL.Query().Get("channel")
+	chatID := r.URL.Query().Get("chatId")
+	if agentID == "" || channel == "" || chatID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "agentId, channel, chatId required"})
+		return
+	}
+	ag := s.agentProvider.AgentByID(agentID)
+	if ag == nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+	history := ag.ExternalSessionHistory(channel, chatID)
+	if history == nil {
+		history = []map[string]any{}
+	}
+	jsonResponse(w, http.StatusOK, history)
+}
+
 func (s *Server) handleDeleteChatSession(w http.ResponseWriter, r *http.Request) {
 	if s.agentProvider == nil {
 		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{"error": "gateway is not running"})
