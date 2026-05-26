@@ -432,21 +432,26 @@ export default function ChatPage() {
     setSessionId(mirrorSid);
     // Load both real Discord history and the mirror session's messages
     // so Web UI messages that haven't synced to Discord are still visible.
-    Promise.all([
-      getExternalHistory(selectedAgent, ch, chatID),
-      getChatHistory(selectedAgent, mirrorSid),
-    ]).then(([extMsgs, mirrorMsgs]) => {
-      const discord = !extMsgs || extMsgs.length === 0 ? [] : buildChatMessages(extMsgs);
-      const mirror = !mirrorMsgs || mirrorMsgs.length === 0 ? [] : buildChatMessages(mirrorMsgs);
-      // Merge: Discord first, then mirror messages (which are more recent web-sent ones)
-      const merged = [...discord];
-      for (const m of mirror) {
-        // Avoid exact duplicates (same content + same role)
-        const dup = merged.find((x) => x.role === m.role && x.content === m.content);
-        if (!dup) merged.push(m);
-      }
-      updateRuntime(displayKey, (s) => ({ ...s, messages: merged }));
-    })
+    getExternalHistory(selectedAgent, ch, chatID)
+      .then((extMsgs) => {
+        const msgs = !extMsgs || extMsgs.length === 0 ? [] : buildChatMessages(extMsgs);
+        return msgs;
+      })
+      .then((msgs) => {
+        // Also try loading the mirror session for any web-sent messages
+        return getChatHistory(selectedAgent, mirrorSid).then((mirrorMsgs) => {
+          if (!mirrorMsgs || mirrorMsgs.length === 0) return msgs;
+          const mirror = buildChatMessages(mirrorMsgs);
+          for (const m of mirror) {
+            const dup = msgs.find((x) => x.role === m.role && x.content === m.content);
+            if (!dup) msgs.push(m);
+          }
+          return msgs;
+        }).catch(() => msgs); // mirror fails → just show Discord messages
+      })
+      .then((msgs) => {
+        updateRuntime(displayKey, (s) => ({ ...s, messages: msgs }));
+      })
       .catch(() => {});
   }, [externChannel, selectedAgent]);
 
