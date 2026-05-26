@@ -423,11 +423,12 @@ export default function ChatPage() {
     if (!externChannel || !selectedAgent) return;
     const [ch, chatID] = parseExternID(externChannel);
     if (!ch || !chatID) return;
+    const key = rtKey(selectedAgent, externChannel);
     setSessionId(externChannel); // use "discord:chatId" as session ID
     getExternalHistory(selectedAgent, ch, chatID)
       .then((history) => {
         const msgs = !history || history.length === 0 ? [] : buildChatMessages(history);
-        updateRuntime(currentKey, (s) => ({ ...s, messages: msgs, sending: false }));
+        updateRuntime(key, (s) => ({ ...s, messages: msgs }));
       })
       .catch(() => {});
   }, [externChannel, selectedAgent]);
