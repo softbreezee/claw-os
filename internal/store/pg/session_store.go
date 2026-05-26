@@ -117,7 +117,7 @@ func (s *SessionStore) ListWebSessions(ctx context.Context, agentID string) ([]m
 func (s *SessionStore) ListExternalSessions(ctx context.Context, agentID string) ([]map[string]string, error) {
 	rows, err := s.db.Pool.Query(ctx,
 		`SELECT session_id, channel, messages FROM sessions
-		 WHERE agent_id = $1 AND channel != 'web'
+		 WHERE agent_id = $1 AND channel IN ('discord', 'telegram')
 		 ORDER BY updated_at DESC`,
 		agentID,
 	)

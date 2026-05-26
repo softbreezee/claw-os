@@ -285,6 +285,10 @@ func (m *Manager) listExternalSessionsFromFiles() []map[string]string {
 		if !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, "web_") {
 			continue
 		}
+		// Only user-facing channels
+		if !strings.HasPrefix(name, "discord_") && !strings.HasPrefix(name, "telegram_") {
+			continue
+		}
 		// Parse "discord_1504039153787076611.jsonl" → channel=discord, chatId=...
 		base := strings.TrimSuffix(name, ".jsonl")
 		parts := strings.SplitN(base, "_", 2)
