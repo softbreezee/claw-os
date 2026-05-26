@@ -434,25 +434,23 @@ export default function ChatPage() {
     // so Web UI messages that haven't synced to Discord are still visible.
     getExternalHistory(selectedAgent, ch, chatID)
       .then((extMsgs) => {
-        const msgs = !extMsgs || extMsgs.length === 0 ? [] : buildChatMessages(extMsgs);
-        return msgs;
+        const msgs = (!extMsgs || extMsgs.length === 0) ? [] : buildChatMessages(extMsgs);
+        // Also try loading mirror for web-sent messages
+        getChatHistory(selectedAgent, mirrorSid)
+          .then((mirrorMsgs) => {
+            if (mirrorMsgs && mirrorMsgs.length > 0) {
+              const extra = buildChatMessages(mirrorMsgs);
+              for (const m of extra) {
+                if (!msgs.find((x) => x.role === m.role && x.content === m.content)) {
+                  msgs.push(m);
+                }
+              }
+            }
+          })
+          .catch(() => {})
+          .finally(() => updateRuntime(displayKey, (s) => ({ ...s, messages: msgs })));
       })
-      .then((msgs) => {
-        // Also try loading the mirror session for any web-sent messages
-        return getChatHistory(selectedAgent, mirrorSid).then((mirrorMsgs) => {
-          if (!mirrorMsgs || mirrorMsgs.length === 0) return msgs;
-          const mirror = buildChatMessages(mirrorMsgs);
-          for (const m of mirror) {
-            const dup = msgs.find((x) => x.role === m.role && x.content === m.content);
-            if (!dup) msgs.push(m);
-          }
-          return msgs;
-        }).catch(() => msgs); // mirror fails → just show Discord messages
-      })
-      .then((msgs) => {
-        updateRuntime(displayKey, (s) => ({ ...s, messages: msgs }));
-      })
-      .catch(() => {});
+      .catch(() => updateRuntime(displayKey, (s) => ({ ...s, messages: [] })));
   }, [externChannel, selectedAgent]);
 
   // Poll context info every 10s; also refresh immediately when (agent, session) changes
