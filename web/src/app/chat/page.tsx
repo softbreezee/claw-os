@@ -866,6 +866,7 @@ export default function ChatPage() {
     // anything here. The OLD tab's runtime (and any in-flight stream) is
     // preserved so background tasks keep running.
     setSessionId(generateSessionId());
+    setExternChannel(null);
   }, []);
 
   const handleDeleteSession = async (sid: string, e: React.MouseEvent) => {
@@ -968,7 +969,7 @@ export default function ChatPage() {
                     ? "bg-primary/10 text-primary"
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                 }`}
-                onClick={() => setSessionId(s.id)}
+                onClick={() => { setSessionId(s.id); setExternChannel(null); }}
               >
                 <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-60" />
                 <span className="flex-1 truncate text-xs">{s.preview}</span>
@@ -1000,7 +1001,7 @@ export default function ChatPage() {
                         ? "bg-primary/10 text-primary"
                         : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                     }`}
-                    onClick={() => setExternChannel(es.id)}
+                    onClick={() => { setExternChannel(es.id); setSessionId(""); }}
                   >
                     <Radio className="h-3.5 w-3.5 shrink-0 opacity-60" />
                     <div className="flex-1 min-w-0">
