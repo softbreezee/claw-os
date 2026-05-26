@@ -424,7 +424,11 @@ export default function ChatPage() {
     const [ch, chatID] = parseExternID(externChannel);
     if (!ch || !chatID) return;
     const key = rtKey(selectedAgent, externChannel);
-    setSessionId(externChannel); // use "discord:chatId" as session ID
+    // Use a mirror session ID ("ext_discord_...") so the web chat
+    // doesn't pollute the real Discord session's history. The real
+    // session is loaded via getExternalHistory for display only.
+    const mirrorSid = `ext_${externChannel.replace(":", "_")}`;
+    setSessionId(mirrorSid);
     getExternalHistory(selectedAgent, ch, chatID)
       .then((history) => {
         const msgs = !history || history.length === 0 ? [] : buildChatMessages(history);
