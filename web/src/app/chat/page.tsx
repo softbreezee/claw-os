@@ -19,6 +19,7 @@ import {
   getSessionSystemPrompt,
   getExternalSessions,
   getExternalHistory,
+  sendToChannel,
   type AgentInfo,
   type ExternalSession,
   type ChatAttachment,
@@ -765,6 +766,10 @@ export default function ChatPage() {
 
     try {
       const [deliverCh, deliverChat] = externChannel ? parseExternID(externChannel) : ["", ""];
+      // Forward user message to Discord so the real session stays in sync
+      if (deliverCh && deliverChat) {
+        sendToChannel(agentForReq, deliverCh, deliverChat, msg).catch(() => {});
+      }
       const { taskId } = await submitChat(
         agentForReq,
         sessionForReq,

@@ -296,6 +296,14 @@ export async function getExternalHistory(agentId: string, channel: string, chatI
   return res.json();
 }
 
+export async function sendToChannel(agentId: string, channel: string, chatId: string, text: string) {
+  return fetch("/api/chat/send-to-channel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentId, channel, chatId, text }),
+  });
+}
+
 export async function sendChat(agentId: string, sessionId: string, message: string): Promise<{ response: string }> {
   const res = await fetch("/api/chat", {
     method: "POST",

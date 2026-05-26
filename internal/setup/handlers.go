@@ -441,6 +441,37 @@ func (s *Server) handleExternalHistory(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, history)
 }
 
+func (s *Server) handleSendToChannel(w http.ResponseWriter, r *http.Request) {
+	if s.agentProvider == nil {
+		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{"error": "gateway not running"})
+		return
+	}
+	var req struct {
+		AgentID string `json:"agentId"`
+		Channel string `json:"channel"`
+		ChatID  string `json:"chatId"`
+		Text    string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+		return
+	}
+	if req.AgentID == "" || req.Channel == "" || req.ChatID == "" || req.Text == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "agentId, channel, chatId, text required"})
+		return
+	}
+	ag := s.agentProvider.AgentByID(req.AgentID)
+	if ag == nil {
+		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "agent not found"})
+		return
+	}
+	if err := ag.SendToChat(r.Context(), req.Channel, req.ChatID, req.Text); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handleDeleteChatSession(w http.ResponseWriter, r *http.Request) {
 	if s.agentProvider == nil {
 		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{"error": "gateway is not running"})

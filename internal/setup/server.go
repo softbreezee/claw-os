@@ -190,6 +190,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/chat/sessions", s.handleChatSessions)
 	mux.HandleFunc("GET /api/chat/external-sessions", s.handleExternalSessions)
 	mux.HandleFunc("GET /api/chat/external-history", s.handleExternalHistory)
+	mux.HandleFunc("POST /api/chat/send-to-channel", s.handleSendToChannel)
 	mux.HandleFunc("DELETE /api/chat/sessions", s.handleDeleteChatSession)
 	mux.HandleFunc("GET /api/chat/context-info", s.handleChatContextInfo)
 	mux.HandleFunc("GET /api/chat/system-prompt", s.handleChatSystemPrompt)

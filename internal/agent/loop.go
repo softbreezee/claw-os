@@ -563,7 +563,15 @@ func (a *Agent) WebChatHistory(sessionId string) []map[string]any {
 
 // WebChatSessions returns a list of web chat sessions with their first user message as preview.
 func (a *Agent) WebChatSessions() []map[string]string {
-	return a.sessions.ListWebSessions()
+	all := a.sessions.ListWebSessions()
+	// Filter out ext_ mirror sessions (used for Discord/Telegram viewing)
+	filtered := make([]map[string]string, 0, len(all))
+	for _, s := range all {
+		if !strings.HasPrefix(s["id"], "ext_") {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
 }
 
 // DeleteWebSession deletes a web chat session by session ID.
