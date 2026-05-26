@@ -170,6 +170,12 @@ function generateSessionId() {
   return `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function parseExternID(id: string): [string, string] {
+  const idx = id.indexOf(":");
+  if (idx < 0) return ["", ""];
+  return [id.slice(0, idx), id.slice(idx + 1)];
+}
+
 function relativeTime(ts: number): string {
   if (!ts) return "";
   const diff = Math.floor((Date.now() - ts) / 1000);
@@ -410,6 +416,21 @@ export default function ChatPage() {
     if (!selectedAgent) return;
     loadSessions(selectedAgent);
   }, [selectedAgent, loadSessions]);
+
+  // When an external channel is selected, load its history and use its
+  // channel/chatId as the session key (for message routing).
+  useEffect(() => {
+    if (!externChannel || !selectedAgent) return;
+    const [ch, chatID] = parseExternID(externChannel);
+    if (!ch || !chatID) return;
+    setSessionId(externChannel); // use "discord:chatId" as session ID
+    getExternalHistory(selectedAgent, ch, chatID)
+      .then((history) => {
+        const msgs = !history || history.length === 0 ? [] : buildChatMessages(history);
+        updateRuntime(currentKey, (s) => ({ ...s, messages: msgs, sending: false }));
+      })
+      .catch(() => {});
+  }, [externChannel, selectedAgent]);
 
   // Poll context info every 10s; also refresh immediately when (agent, session) changes
   // or when a send completes (sending flips false→true→false).
@@ -735,12 +756,15 @@ export default function ChatPage() {
     clearAttachments();
 
     try {
+      const [deliverCh, deliverChat] = externChannel ? parseExternID(externChannel) : ["", ""];
       const { taskId } = await submitChat(
         agentForReq,
         sessionForReq,
         msg,
         modelOverride || undefined,
         filesToSend,
+        deliverCh || undefined,
+        deliverChat || undefined,
       );
       // Persist taskId BEFORE subscribing so handleStop knows what to
       // cancel and the resume effect can find this in-flight task.

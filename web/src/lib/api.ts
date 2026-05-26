@@ -361,6 +361,8 @@ export async function submitChat(
   message: string,
   model?: string,
   files?: File[],
+  deliverToChannel?: string,
+  deliverToChatId?: string,
 ): Promise<{ taskId: string; status: ChatTaskStatus }> {
   let res: Response;
 
@@ -370,6 +372,8 @@ export async function submitChat(
     form.append("sessionId", sessionId);
     form.append("message", message);
     if (model) form.append("model", model);
+    if (deliverToChannel) form.append("deliverToChannel", deliverToChannel);
+    if (deliverToChatId) form.append("deliverToChatId", deliverToChatId);
     for (const f of files) {
       // The backend reads from r.MultipartForm.File["files"], so the
       // field name must literally be "files" for every file.
@@ -390,6 +394,8 @@ export async function submitChat(
         sessionId,
         message,
         ...(model ? { model } : {}),
+        ...(deliverToChannel ? { deliverToChannel } : {}),
+        ...(deliverToChatId ? { deliverToChatId } : {}),
       }),
     });
   }
