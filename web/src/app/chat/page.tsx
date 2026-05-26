@@ -423,16 +423,16 @@ export default function ChatPage() {
     if (!externChannel || !selectedAgent) return;
     const [ch, chatID] = parseExternID(externChannel);
     if (!ch || !chatID) return;
-    const key = rtKey(selectedAgent, externChannel);
     // Use a mirror session ID ("ext_discord_...") so the web chat
     // doesn't pollute the real Discord session's history. The real
     // session is loaded via getExternalHistory for display only.
     const mirrorSid = `ext_${externChannel.replace(":", "_")}`;
+    const displayKey = rtKey(selectedAgent, mirrorSid);
     setSessionId(mirrorSid);
     getExternalHistory(selectedAgent, ch, chatID)
       .then((history) => {
         const msgs = !history || history.length === 0 ? [] : buildChatMessages(history);
-        updateRuntime(key, (s) => ({ ...s, messages: msgs }));
+        updateRuntime(displayKey, (s) => ({ ...s, messages: msgs }));
       })
       .catch(() => {});
   }, [externChannel, selectedAgent]);
@@ -457,9 +457,9 @@ export default function ChatPage() {
   // user navigates back to a tab that is still working).
   useEffect(() => {
     if (!selectedAgent || !sessionId) return;
-    // External sessions (discord:..., telegram:...) are loaded by
+    // External sessions (discord:..., ext_discord_...) are loaded by
     // the external history effect — skip web history for them.
-    if (sessionId.includes(":")) return;
+    if (sessionId.includes(":") || sessionId.startsWith("ext_")) return;
     const key = rtKey(selectedAgent, sessionId);
     const existing = runtimesRef.current[key];
     if (existing && (existing.sending || existing.messages.length > 0)) return;
