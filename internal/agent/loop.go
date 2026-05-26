@@ -624,14 +624,14 @@ func (a *Agent) ExternalSessionHistory(channel, chatID string) []map[string]any 
 	return history
 }
 
-// SendToChat delivers a message to a specific channel/chatID.
+// SendToChat delivers a message directly to a channel/chatID via the
+// gateway's outbound bus. The reply goes straight to the channel's
+// Send API without re-entering the agent's message loop.
 func (a *Agent) SendToChat(ctx context.Context, channel, chatID, text string) error {
-	a.messageBus.Inbound <- bus.InboundMessage{
-		Channel:  channel,
-		ChatID:   chatID,
-		Text:     text,
-		PeerKind: "dm",
-		Origin:   "internal",
+	a.messageBus.Outbound <- bus.OutboundMessage{
+		Channel: channel,
+		ChatID:  chatID,
+		Text:    text,
 	}
 	return nil
 }
