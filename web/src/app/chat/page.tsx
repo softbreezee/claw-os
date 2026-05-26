@@ -195,6 +195,24 @@ function chatAttachmentsToMsg(atts?: ChatAttachment[]): MessageAttachment[] | un
   return atts.map((a) => ({ type: a.type === "image" ? "image" : "file", url: a.url }));
 }
 
+function buildExternalMessages(history: ChatHistoryMessage[]): ChatMessage[] {
+  return history
+    .filter((h) => h.role !== "tool") // skip raw tool outputs in external view
+    .map((h, i) => {
+      const msg: ChatMessage = {
+        id: `h-${i}`,
+        role: h.role === "assistant" ? "agent" : "user",
+        content: h.content || "",
+        timestamp: 0,
+      };
+      if (h.role === "assistant" && h.toolCalls && h.toolCalls.length > 0) {
+        msg.role = "tool-group";
+        msg.toolCalls = h.toolCalls.map((tc) => ({ ...tc, result: undefined }));
+      }
+      return msg;
+    });
+}
+
 function buildChatMessages(history: ChatHistoryMessage[]): ChatMessage[] {
   const msgs: ChatMessage[] = [];
   let i = 0;
@@ -432,25 +450,29 @@ export default function ChatPage() {
     setSessionId(mirrorSid);
     // Load both real Discord history and the mirror session's messages
     // so Web UI messages that haven't synced to Discord are still visible.
-    getExternalHistory(selectedAgent, ch, chatID)
-      .then((extMsgs) => {
-        const msgs = (!extMsgs || extMsgs.length === 0) ? [] : buildChatMessages(extMsgs);
-        // Also try loading mirror for web-sent messages
-        getChatHistory(selectedAgent, mirrorSid)
-          .then((mirrorMsgs) => {
-            if (mirrorMsgs && mirrorMsgs.length > 0) {
-              const extra = buildChatMessages(mirrorMsgs);
-              for (const m of extra) {
-                if (!msgs.find((x) => x.role === m.role && x.content === m.content)) {
-                  msgs.push(m);
+    const refresh = () => {
+      getExternalHistory(selectedAgent, ch, chatID)
+        .then((extMsgs) => {
+          const msgs = (!extMsgs || extMsgs.length === 0) ? [] : buildExternalMessages(extMsgs);
+          getChatHistory(selectedAgent, mirrorSid)
+            .then((mirrorMsgs) => {
+              if (mirrorMsgs && mirrorMsgs.length > 0) {
+                const extra = buildExternalMessages(mirrorMsgs);
+                for (const m of extra) {
+                  if (!msgs.find((x) => x.role === m.role && x.content === m.content)) {
+                    msgs.push(m);
+                  }
                 }
               }
-            }
-          })
-          .catch(() => {})
-          .finally(() => updateRuntime(displayKey, (s) => ({ ...s, messages: msgs })));
-      })
-      .catch(() => updateRuntime(displayKey, (s) => ({ ...s, messages: [] })));
+            })
+            .catch(() => {})
+            .finally(() => updateRuntime(displayKey, (s) => ({ ...s, messages: msgs })));
+        })
+        .catch(() => updateRuntime(displayKey, (s) => ({ ...s, messages: [] })));
+    };
+    refresh();
+    const iv = setInterval(refresh, 30000);
+    return () => clearInterval(iv);
   }, [externChannel, selectedAgent]);
 
   // Poll context info every 10s; also refresh immediately when (agent, session) changes
