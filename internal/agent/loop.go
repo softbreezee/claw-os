@@ -636,6 +636,13 @@ func (a *Agent) ExternalSessionHistory(channel, chatID string) []map[string]any 
 // gateway's outbound bus. The reply goes straight to the channel's
 // Send API without re-entering the agent's message loop.
 func (a *Agent) SendToChat(ctx context.Context, channel, chatID, text string) error {
+	// Write to the external session so the Web UI channel view
+	// (which polls /api/chat/external-history) sees the message.
+	sess := a.sessions.Get(channel, chatID)
+	sess.Append(provider.Message{Role: "user", Content: text})
+
+	// Also send to the real channel via the gateway's outbound bus
+	// so it appears in Discord / Telegram.
 	a.messageBus.Outbound <- bus.OutboundMessage{
 		Channel: channel,
 		ChatID:  chatID,
