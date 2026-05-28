@@ -315,7 +315,19 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	history := ag.WebChatHistory(sessionID)
+	// Support both web sessions and external channel sessions.
+	var history []map[string]any
+	if strings.HasPrefix(sessionID, "ext_") {
+		rest := strings.TrimPrefix(sessionID, "ext_")
+		parts := strings.SplitN(rest, "_", 2)
+		if len(parts) == 2 {
+			history = ag.ExternalSessionHistory(parts[0], parts[1])
+		}
+	} else if idx := strings.Index(sessionID, ":"); idx > 0 {
+		history = ag.ExternalSessionHistory(sessionID[:idx], sessionID[idx+1:])
+	} else {
+		history = ag.WebChatHistory(sessionID)
+	}
 	if history == nil {
 		history = []map[string]any{}
 	}

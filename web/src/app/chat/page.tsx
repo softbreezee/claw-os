@@ -495,9 +495,9 @@ export default function ChatPage() {
   // user navigates back to a tab that is still working).
   useEffect(() => {
     if (!selectedAgent || !sessionId) return;
-    // External sessions (discord:..., ext_discord_...) are loaded by
-    // the external history effect — skip web history for them.
-    if (sessionId.includes(":") || sessionId.startsWith("ext_")) return;
+    // External sessions (discord:...) loaded by external effect;
+    // ext_discord_... sessions now handled by updated handleChatHistory API.
+    if (sessionId.includes(":")) return;
     const key = rtKey(selectedAgent, sessionId);
     const existing = runtimesRef.current[key];
     if (existing && (existing.sending || existing.messages.length > 0)) return;
