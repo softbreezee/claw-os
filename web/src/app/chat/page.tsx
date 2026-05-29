@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -193,6 +193,35 @@ function relativeTime(ts: number): string {
 function chatAttachmentsToMsg(atts?: ChatAttachment[]): MessageAttachment[] | undefined {
   if (!atts || atts.length === 0) return undefined;
   return atts.map((a) => ({ type: a.type === "image" ? "image" : "file", url: a.url }));
+}
+
+function CodeBlock({ children, className }: { children: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  const match = /language-(\w+)/.exec(className || "");
+  const handleCopy = () => {
+    navigator.clipboard.writeText(children);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div className="relative group my-2">
+      {match && (
+        <div className="flex items-center justify-between px-4 py-1.5 bg-muted/50 rounded-t-md border border-border border-b-0 text-[11px] text-muted-foreground font-mono">
+          <span>{match[1]}</span>
+          <button
+            onClick={handleCopy}
+            className="flex items-center gap-1 text-muted-foreground/60 hover:text-foreground transition-colors"
+          >
+            {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+            <span className="text-[10px]">{copied ? "Copied" : "Copy"}</span>
+          </button>
+        </div>
+      )}
+      <pre className={`${match ? "rounded-t-none" : "rounded-md"} bg-muted/30 border border-border p-3 overflow-x-auto text-[13px] leading-relaxed`}>
+        <code className={className}>{children}</code>
+      </pre>
+    </div>
+  );
 }
 
 function buildExternalMessages(history: ChatHistoryMessage[]): ChatMessage[] {
@@ -1888,6 +1917,18 @@ function MessageBubble({
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
+                  pre: ({ children }) => {
+                    // Extract code content from the pre > code structure
+                    const child = React.isValidElement(children)
+                      ? children as React.ReactElement<{ children?: string; className?: string }>
+                      : null;
+                    const code = child?.props?.children || "";
+                    const className = child?.props?.className || "";
+                    if (typeof code === "string" && code) {
+                      return <CodeBlock className={className}>{code}</CodeBlock>;
+                    }
+                    return <pre>{children}</pre>;
+                  },
                   // Resolve `![](file.png)` from the agent — the file
                   // typically lives in the agent's workspace, served
                   // through /api/files. Click to open lightbox.
@@ -2011,7 +2052,19 @@ function ToolCallGroup({ msg }: { msg: ChatMessage }) {
         {msg.content && (
           <div className="rounded-2xl rounded-bl-sm bg-muted px-4 py-2.5">
             <div className="text-[14px] leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-1">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                pre: ({ children }) => {
+                  const child = React.isValidElement(children)
+                    ? children as React.ReactElement<{ children?: string; className?: string }>
+                    : null;
+                  const code = child?.props?.children || "";
+                  const className = child?.props?.className || "";
+                  if (typeof code === "string" && code) {
+                    return <CodeBlock className={className}>{code}</CodeBlock>;
+                  }
+                  return <pre>{children}</pre>;
+                },
+              }}>{msg.content}</ReactMarkdown>
             </div>
           </div>
         )}
