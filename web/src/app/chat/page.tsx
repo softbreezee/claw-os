@@ -1318,6 +1318,13 @@ export default function ChatPage() {
         {/* Messages */}
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="mx-auto max-w-3xl px-4 py-6 space-y-1">
+            {/* Live progress against the agent's plan. Polls
+                workspace/todo.md every 3s and renders the checkbox
+                state inline above the message stream. Auto-hides when
+                the file doesn't exist or has no checkbox lines, so
+                agents that don't use /plan never see this. */}
+            {selectedAgent && <TodoPanel agentId={selectedAgent} />}
+
             {messages.length === 0 && !sending && (
               <EmptyState agentName={selectedAgent} onPrompt={(p) => handleSend(p)} />
             )}
@@ -2210,6 +2217,137 @@ function AttachmentTile({
     <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
       <FileText className="h-4 w-4 text-muted-foreground" />
       <span className="text-xs text-muted-foreground">{att.name || "file"}</span>
+    </div>
+  );
+}
+
+// ── Todo panel ───────────────────────────────────────────────────────────────
+// Per-agent progress panel. Polls the agent's workspace todo.md every
+// few seconds and renders any markdown checkbox lines (- [ ] / - [x])
+// as a checklist. Pinned to the top of the messages stream so the
+// user can "围观" execution against the plan they accepted via /plan.
+//
+// Returns null when:
+//   - there's no agent selected
+//   - the file doesn't exist (404 from /api/files)
+//   - no checkbox lines parsed (file exists but has no actionable items)
+//
+// We deliberately don't write to todo.md from the UI — the model owns
+// it via write_file. This keeps the data model one-way (model → UI)
+// and avoids the editing-while-the-agent-rewrites race.
+interface TodoItem {
+  done: boolean;
+  text: string;
+}
+
+function parseTodos(md: string): TodoItem[] {
+  if (!md) return [];
+  const out: TodoItem[] = [];
+  // Match `- [ ] foo` / `- [x] foo` / `* [X] foo`. Allow leading
+  // indent so nested checkboxes still surface (we render flat — the
+  // model doesn't get hierarchy semantics in v0.3 anyway).
+  const re = /^\s*[-*]\s*\[([ xX])\]\s+(.+?)\s*$/;
+  for (const line of md.split("\n")) {
+    const m = line.match(re);
+    if (!m) continue;
+    out.push({ done: m[1].toLowerCase() === "x", text: m[2] });
+  }
+  return out;
+}
+
+function TodoPanel({ agentId }: { agentId: string }) {
+  const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    if (!agentId) {
+      setTodos([]);
+      return;
+    }
+    let cancelled = false;
+    const url = fileURL({ kind: "workspace", path: "todo.md", agentId });
+
+    const fetchOnce = async () => {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) {
+          if (!cancelled) setTodos([]);
+          return;
+        }
+        const text = await res.text();
+        if (cancelled) return;
+        setTodos(parseTodos(text));
+      } catch {
+        if (!cancelled) setTodos([]);
+      }
+    };
+
+    fetchOnce();
+    const id = setInterval(fetchOnce, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [agentId]);
+
+  if (todos.length === 0) return null;
+
+  const doneCount = todos.filter((t) => t.done).length;
+  const allDone = doneCount === todos.length;
+
+  return (
+    <div className="mb-3 rounded-lg border border-blue-500/20 bg-blue-500/5 px-3.5 py-2.5 text-[13px]">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-blue-500/80">
+          <ListChecks className="h-3.5 w-3.5" />
+          <span>todo.md</span>
+          <span
+            className={
+              allDone
+                ? "rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-emerald-600 dark:text-emerald-400 normal-case"
+                : "rounded-full bg-blue-500/15 px-1.5 py-0.5 text-blue-500 normal-case"
+            }
+          >
+            {doneCount} / {todos.length}
+          </span>
+        </div>
+        {collapsed ? (
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/60" />
+        )}
+      </button>
+      {!collapsed && (
+        <ul className="mt-2 space-y-1">
+          {todos.map((t, i) => (
+            <li key={i} className="flex items-start gap-2">
+              <span
+                className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${
+                  t.done
+                    ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                    : "border-muted-foreground/30 bg-transparent"
+                }`}
+                aria-hidden
+              >
+                {t.done && <Check className="h-2.5 w-2.5" />}
+              </span>
+              <span
+                className={
+                  t.done
+                    ? "text-muted-foreground/60 line-through"
+                    : "text-foreground/90"
+                }
+              >
+                {t.text}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

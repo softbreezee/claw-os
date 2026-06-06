@@ -258,6 +258,9 @@ func NewAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider.Provider, mb *
 	tools.RegisterMessage(registry, mb)
 	tools.RegisterMemorySearch(registry, rc.Workspace)
 	tools.RegisterWebFetch(registry)
+	// delegate_task: independent ReAct loop with fresh iteration
+	// budget; sub-task can't recursively delegate (filtered out of
+	// its toolset). See internal/agent/delegate.go.
 	// Pass the builtin skills dir so load_skill can also resolve
 	// shipped skills (docx, pdf, debugging, …) by name. Computed once
 	// at agent construction; if the binary moves at runtime the agent
@@ -329,6 +332,12 @@ func NewAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider.Provider, mb *
 			slog.Info("registered MCP tools", "agent", rc.ID)
 		}
 	}
+
+	// delegate_task is registered last so it can reference the fully-
+	// constructed Agent (provider, model, registry, ctxBuilder, engine)
+	// as its DelegateRunner. Registering earlier would either need a
+	// forward closure that risks nil derefs or split init logic.
+	tools.RegisterDelegateTask(ag.registry, ag)
 
 	return ag
 }
