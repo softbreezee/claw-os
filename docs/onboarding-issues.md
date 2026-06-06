@@ -17,9 +17,9 @@
 | Bug-5  | Test 没成功也允许 Next                 | ✅ 已修复    | `canProceed` step 1 加 `testStatus === "success"` 校验 |
 | Bug-6  | testStatus 不在表单变更时重置          | ✅ 已修复    | `updateConfig` 检测 `TEST_INVALIDATING_KEYS` 自动 reset |
 | Bug-7  | handleLaunch 失败假装成功              | ✅ 已修复    | 解析 `{ok, error}` 契约；失败显示 `launchError` 横条，不放彩带不跳转 |
-| Bug-8  | 跳转 hardcode `localhost`              | 🟡 部分修复 | 改用 `window.location.hostname` + protocol；waitForGateway 轮询 + restart 流程未做 |
+| Bug-8  | 跳转 hardcode `localhost`              | ✅ 已修复（v0.3）| `window.location.hostname` + protocol；handleLaunch 通过 `waitForGateway(20s)` 轮询 `/api/status`，daemon 报告 `running:true` 后再跳；超时时附带 daemon.log 提示但仍跳转，避免卡住用户 |
 | Bug-9  | handleSaveConfig 硬覆盖写入            | ✅ 已修复    | 改为 `config.Load() + merge` 模式，保留 storage/cron/hooks/其它 agent |
-| Bug-10 | Telegram 字段无 UI                    | ⏳ 未做      | OnboardConfig 已有字段，下一轮再加 UI |
+| Bug-10 | Telegram 字段无 UI                    | ✅ 已修复（v0.3）| step 2 在 Personality 之前加 Telegram bot 复选框 + token 输入；勾选时 token 必填进入 `canProceed`；后端 `saveConfigRequest.TelegramEnabled / TelegramToken` 已存在，前端只补 UI |
 | Bug-19 | storage（DB）配置无 onboard 入口       | ✅ 已修复    | step 2 加 Storage Backend select + PostgreSQL DSN 输入；后端 `saveConfigRequest` 加 `StorageType` / `StorageDSN` |
 
 P1/P2/P3 的体验和打磨项（Bug-11~18）暂未处理，留待下一轮。

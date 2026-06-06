@@ -23,13 +23,39 @@ type MemoryHit struct {
 	Content string
 }
 
+// MemoryHealthSnapshot is the projected, agent-package-local view of
+// pg.MemoryHealth. The fields mirror the upstream type so the gateway
+// adapter can copy across without dragging the pg import into
+// internal/agent.
+type MemoryHealthSnapshot struct {
+	Total          int64
+	WithEmbedding  int64
+	RecentTotal    int64
+	RecentEmbedded int64
+}
+
+// RecentCoveragePct is the same convenience as pg.MemoryHealth's —
+// duplicated here to avoid the import. -1 means "no recent rows
+// to score".
+func (h MemoryHealthSnapshot) RecentCoveragePct() int {
+	if h.RecentTotal == 0 {
+		return -1
+	}
+	return int((h.RecentEmbedded * 100) / h.RecentTotal)
+}
+
 // PGMemoryStore is the abstract interface used by the agent layer for
 // PostgreSQL-backed memory persistence and retrieval. Implemented by
 // *pg.MemoryStore via an adapter in the gateway; declared here as a
 // minimal contract so internal/agent doesn't import internal/store/pg.
+//
+// HealthStats is best-effort: the adapter can return (zero, nil) on a
+// store that doesn't support it, and the heartbeat caller treats any
+// error as "skip this round" rather than degrading the agent.
 type PGMemoryStore interface {
 	Insert(ctx context.Context, agentID, kind, content string, embedding []float32, tags []string) (string, error)
 	SearchSemantic(ctx context.Context, agentID string, queryEmbedding []float32, limit int) ([]MemoryHit, error)
+	HealthStats(ctx context.Context, agentID string) (MemoryHealthSnapshot, error)
 }
 
 // Memory manages the dual-layer memory system (MEMORY.md + HISTORY.md).

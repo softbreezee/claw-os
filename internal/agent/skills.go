@@ -230,7 +230,39 @@ func (sl *SkillsLoader) LoadSkills() []Skill {
 	return result
 }
 
-// BuildSkillsSummary returns an XML summary of all skills for the system prompt.
+// SkillsSummaryBudgetTokens caps the size of the skills section in the
+// system prompt. With ~28 skills the previous unbounded version sat
+// around 4.5k tokens (see docs/system-prompt-improvements.md P1); this
+// budget keeps the section closer to ~1.5k once descriptions are
+// trimmed and bodies are loaded on demand via the load_skill tool.
+//
+// The cap is per-section, not total prompt. Skills marked AlwaysLoad
+// (or carrying meta.always) bypass the per-skill description trim
+// because the model needs their full body before the first turn —
+// but they still count toward the section budget. If always-loaded
+// skills alone exceed the budget, we keep them all (they were
+// explicitly elevated by configuration) and emit a warning log; the
+// fix is to drop the always-load tag, not silently truncate.
+const SkillsSummaryBudgetTokens = 2000
+
+// SkillSummaryDescChars caps a single non-always-loaded skill's
+// description shown in the summary. ~200 chars maps to ~50 tokens —
+// enough for "what does this skill do, when should I reach for it".
+// The full body is reachable via the load_skill tool.
+const SkillSummaryDescChars = 200
+
+// BuildSkillsSummary returns an XML summary of all skills for the
+// system prompt. Always-loaded skills inline their full body; the
+// rest emit a one-line summary the model uses to decide whether to
+// call load_skill mid-turn.
+//
+// Truncation policy when the section exceeds SkillsSummaryBudgetTokens:
+//  1. Always-loaded skills are kept in full (configuration intent).
+//  2. Remaining (summary-only) skills are kept in input order until
+//     the running token estimate would exceed the budget.
+//  3. A trailing "<more skills available — call load_skill>" hint
+//     is appended so the model knows to ask by name even for skills
+//     that were dropped from the listing.
 func (sl *SkillsLoader) BuildSkillsSummary(skills []Skill) string {
 	if len(skills) == 0 {
 		return ""
@@ -244,23 +276,90 @@ func (sl *SkillsLoader) BuildSkillsSummary(skills []Skill) string {
 		alwaysLoad[name] = true
 	}
 
-	var sb strings.Builder
-	sb.WriteString("<skills>\n")
-
+	// Two-pass build so the budget can be enforced cleanly: first
+	// emit always-loaded skills (which are non-negotiable), then walk
+	// summary-only skills and stop when the budget would be exceeded.
+	var alwaysSection strings.Builder
+	alwaysCount := 0
 	for _, skill := range skills {
-		if alwaysLoad[skill.Name] || (skill.Metadata != nil && skill.Metadata.Meta() != nil && skill.Metadata.Meta().Always) {
-			fmt.Fprintf(&sb, "<skill name=%q layer=%q>\n%s\n</skill>\n", skill.Name, skill.Layer, skill.Content)
-		} else {
-			summary := skill.Description
-			if summary == "" {
-				summary = firstLine(skill.Content)
-			}
-			fmt.Fprintf(&sb, "<skill name=%q layer=%q summary=%q />\n", skill.Name, skill.Layer, summary)
+		isAlways := alwaysLoad[skill.Name] || (skill.Metadata != nil && skill.Metadata.Meta() != nil && skill.Metadata.Meta().Always)
+		if !isAlways {
+			continue
 		}
+		fmt.Fprintf(&alwaysSection, "<skill name=%q layer=%q>\n%s\n</skill>\n", skill.Name, skill.Layer, skill.Content)
+		alwaysCount++
 	}
 
+	alwaysTokens := estimateStringTokens(alwaysSection.String())
+	if alwaysTokens > SkillsSummaryBudgetTokens {
+		slog.Warn("skills always-load body exceeds section budget — keeping all but consider trimming",
+			"always_count", alwaysCount,
+			"always_tokens", alwaysTokens,
+			"budget_tokens", SkillsSummaryBudgetTokens)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("<skills>\n")
+	sb.WriteString(alwaysSection.String())
+
+	remainingBudget := SkillsSummaryBudgetTokens - alwaysTokens
+	dropped := 0
+	for _, skill := range skills {
+		isAlways := alwaysLoad[skill.Name] || (skill.Metadata != nil && skill.Metadata.Meta() != nil && skill.Metadata.Meta().Always)
+		if isAlways {
+			continue
+		}
+		summary := skill.Description
+		if summary == "" {
+			summary = firstLine(skill.Content)
+		}
+		summary = trimSkillSummary(summary, SkillSummaryDescChars)
+
+		entry := fmt.Sprintf("<skill name=%q layer=%q summary=%q />\n", skill.Name, skill.Layer, summary)
+		entryTokens := estimateStringTokens(entry)
+
+		if remainingBudget-entryTokens < 0 && sb.Len() > len("<skills>\n")+alwaysSection.Len() {
+			// Budget blown AND we've emitted at least one summary
+			// already — stop listing, the model can still discover the
+			// rest via load_skill by name.
+			dropped++
+			continue
+		}
+		sb.WriteString(entry)
+		remainingBudget -= entryTokens
+	}
+
+	if dropped > 0 {
+		fmt.Fprintf(&sb, "<more dropped=%d hint=%q />\n", dropped,
+			"section budget reached; remaining skills are still callable by name via load_skill")
+	}
 	sb.WriteString("</skills>")
 	return sb.String()
+}
+
+// trimSkillSummary collapses internal whitespace and caps a skill
+// description at maxChars. The cut happens on a rune boundary so we
+// don't slice through multibyte characters; an ellipsis marks the
+// cut so the model knows the description was truncated.
+func trimSkillSummary(s string, maxChars int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if maxChars <= 0 || len(s) <= maxChars {
+		return s
+	}
+	// Walk runes so we never slice mid-character.
+	runeCount := 0
+	cut := 0
+	for i := range s {
+		if runeCount >= maxChars {
+			cut = i
+			break
+		}
+		runeCount++
+	}
+	if cut == 0 {
+		return s
+	}
+	return s[:cut] + "…"
 }
 
 // SkillEnvVars returns environment variables for a specific skill from global config.

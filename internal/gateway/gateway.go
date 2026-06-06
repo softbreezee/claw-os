@@ -89,6 +89,21 @@ func New(cfg *config.Config) (*Gateway, error) {
 				slog.Info("pg: storage backend active")
 				sessionStore := pgstore.NewSessionStore(db)
 				memStore := pgstore.NewMemoryStore(db)
+				// pgvector readiness probe — catches the silent-failure
+				// mode where Migrate succeeds but the extension isn't
+				// actually loaded (some managed Postgres flavors). We
+				// log loudly but don't disable the memory backend; the
+				// keyword-search fallback still works and the user can
+				// fix pgvector without a redeploy. See
+				// docs/memory-verification.md for the full failure modes
+				// this guards against.
+				if err := memStore.VerifyVectorReady(context.Background()); err != nil {
+					slog.Warn("pg: vector readiness probe failed — semantic memory will degrade to keyword search",
+						"error", err,
+						"hint", "ensure pgvector extension is installed: CREATE EXTENSION vector;")
+				} else {
+					slog.Info("pg: pgvector readiness probe ok")
+				}
 				pgBackend := &agent.PGBackend{
 					SessionStore:    sessionStore,
 					MemoryStore:     &memStoreAdapter{inner: memStore},
@@ -346,9 +361,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		// internal triggers ALSO push through the IM bot. Plain
 		// human-channel input (real chat) keeps the existing
 		// outbound-only path so we don't double-notify.
-		isInternalOrigin := task.Message.Origin == "cron" ||
-			task.Message.Origin == "webhook" ||
-			task.Message.Origin == "internal"
+		isInternalOrigin := bus.IsRuntimeInjected(task.Message.Origin)
 		channelIsReal := task.Message.Channel != "" && task.Message.Channel != "web"
 
 		var typingDone chan struct{}

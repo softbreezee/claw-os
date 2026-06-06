@@ -41,3 +41,20 @@ func (a *memStoreAdapter) SearchSemantic(ctx context.Context, agentID string, qu
 	}
 	return hits, nil
 }
+
+// HealthStats projects pg.MemoryHealth into the agent-local snapshot
+// type. Heartbeat consumes this to detect silent embedding pipeline
+// failures (recent NULL rate spiking) without internal/agent learning
+// about pg internals. See docs/memory-verification.md.
+func (a *memStoreAdapter) HealthStats(ctx context.Context, agentID string) (agent.MemoryHealthSnapshot, error) {
+	h, err := a.inner.HealthStats(ctx, agentID)
+	if err != nil {
+		return agent.MemoryHealthSnapshot{}, err
+	}
+	return agent.MemoryHealthSnapshot{
+		Total:          h.Total,
+		WithEmbedding:  h.WithEmbedding,
+		RecentTotal:    h.RecentTotal,
+		RecentEmbedded: h.RecentEmbedded,
+	}, nil
+}

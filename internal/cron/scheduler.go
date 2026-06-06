@@ -187,8 +187,8 @@ func (s *Scheduler) processDueJobs(ctx context.Context) {
 			UserID:    "cron",
 			Text:      text,
 			PeerKind:  "dm",
-			AgentID:   j.AgentID, // bypass binding match — cron knows its agent
-			Origin:    "cron",    // signals "deliver as Notification, not chat reply"
+			AgentID:   j.AgentID,      // bypass binding match — cron knows its agent
+			Origin:    bus.OriginCron, // signals "deliver as Notification, not chat reply"
 		}
 
 		// Compute the actual next fire time from the job's schedule. The
@@ -457,8 +457,8 @@ func (s *Scheduler) fireJob(job Job) {
 		UserID:    "cron",
 		Text:      text,
 		PeerKind:  "dm",
-		AgentID:   job.AgentID, // bypass binding match
-		Origin:    "cron",      // signals "deliver as Notification, not chat reply"
+		AgentID:   job.AgentID,    // bypass binding match
+		Origin:    bus.OriginCron, // signals "deliver as Notification, not chat reply"
 	}
 }
 

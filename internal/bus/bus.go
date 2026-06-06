@@ -1,5 +1,52 @@
 package bus
 
+// Origin identifies what produced an InboundMessage. The default
+// (empty string) is "real user input from a channel/web", which keeps
+// every existing producer correct without touching it. Runtime-
+// originated messages (cron / webhook / agent-to-agent / goal
+// continuations / mid-run user steering) carry a non-empty origin so
+// downstream policy can distinguish them.
+//
+// The reply path uses this to decide between sending out via channel
+// (real chat) and writing a Notification record (cron / webhook /
+// internal). The agent loop and goal/steer hooks branch on it too.
+//
+// IMPORTANT: OriginUser MUST stay "". Many producers (web POST, IM
+// adapters, plugins) leave Origin unset; if OriginUser ever became a
+// non-empty string the zero-value InboundMessage would silently
+// reclassify as a non-user message and break routing.
+const (
+	OriginUser        = "" // default — real user input from a channel/web
+	OriginChannel     = "" // alias of OriginUser, for callers that want to spell it out
+	OriginCron        = "cron"
+	OriginWebhook     = "webhook"
+	OriginInternal    = "internal" // agent-to-agent, gateway-self injected
+	OriginHeartbeat   = "heartbeat"
+	OriginSubAgent    = "subagent"
+	OriginGoalContext = "goal_context" // goal-runtime continuation prompt
+	OriginUserSteer   = "user_steer"   // mid-run user steering message
+)
+
+// IsRuntimeInjected reports whether a message was produced by the
+// runtime rather than a real channel user. Used by reply routing to
+// pick "Notification record" vs. "send out via channel", and by the
+// agent loop to gate behaviors like compaction-on-user-turn.
+//
+// OriginHeartbeat / OriginGoalContext / OriginUserSteer / OriginSubAgent
+// are currently treated as "non-internal" because they ARE conceptually
+// part of the user's conversation (or driven by it) — only cron /
+// webhook / internal are out-of-band relative to the chat. Keep this
+// list in sync with isInternalOrigin checks elsewhere; centralizing
+// here is the whole point.
+func IsRuntimeInjected(origin string) bool {
+	switch origin {
+	case OriginCron, OriginWebhook, OriginInternal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Attachment represents a file attached to an inbound message — image,
 // (in future) PDF, audio, etc.
 //
@@ -45,14 +92,14 @@ type InboundMessage struct {
 	AgentID string
 
 	// Origin tags the source of the inbound message so downstream
-	// routing can apply per-origin policy. Known values:
-	//   "" / "channel" — real IM/web user input (default)
-	//   "cron"          — emitted by internal/cron.Scheduler.fireJob
-	//   "webhook"       — emitted by internal/webhook on hook delivery
-	//   "internal"      — emitted by another agent / the gateway itself
-	// The reply path uses this to decide whether to send via
-	// outbound channel (real chat) vs. write a Notification record
-	// (cron / webhook / internal).
+	// routing can apply per-origin policy. See the Origin* constants
+	// above for the full enum. The reply path uses this to decide
+	// whether to send via outbound channel (real chat) vs. write a
+	// Notification record (cron / webhook / internal); v0.3 Goal +
+	// Steering features tag continuation / steer messages here too.
+	//
+	// Empty string == OriginUser (real user input). Keep it that way
+	// so producers that don't set Origin stay correct.
 	Origin string
 }
 

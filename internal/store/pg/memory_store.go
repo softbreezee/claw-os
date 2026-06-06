@@ -159,6 +159,84 @@ func scanMemories(rows rowScanner) ([]MemoryRecord, error) {
 	return results, nil
 }
 
+// MemoryHealth summarises the embedding-coverage health of an agent's
+// memory rows. Surfaced via Heartbeat so silent failures (no embed
+// model, embed API broken, agent_id renamed leaving rows orphaned)
+// stop being invisible — see docs/memory-verification.md for the
+// failure modes this guards against.
+type MemoryHealth struct {
+	Total          int64 // total memory rows for the agent
+	WithEmbedding  int64 // rows where embedding IS NOT NULL
+	RecentTotal    int64 // rows created in the last 24h
+	RecentEmbedded int64 // recent rows with non-null embedding
+}
+
+// CoveragePct returns WithEmbedding / Total as a 0..100 integer, or
+// -1 when Total is 0 (no data, "not applicable" rather than "0%").
+func (h MemoryHealth) CoveragePct() int {
+	if h.Total == 0 {
+		return -1
+	}
+	return int((h.WithEmbedding * 100) / h.Total)
+}
+
+// RecentCoveragePct is the same ratio but bounded to the last 24h
+// window. This is the more useful number for "is the embedding
+// pipeline working RIGHT NOW" — old rows from before embedding was
+// configured drag down the all-time stat indefinitely.
+func (h MemoryHealth) RecentCoveragePct() int {
+	if h.RecentTotal == 0 {
+		return -1
+	}
+	return int((h.RecentEmbedded * 100) / h.RecentTotal)
+}
+
+// HealthStats reports embedding coverage for the agent's memory rows.
+// One round-trip; returns the zero value with an error on query
+// failure rather than partial data.
+func (s *MemoryStore) HealthStats(ctx context.Context, agentID string) (MemoryHealth, error) {
+	var h MemoryHealth
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT
+		   COUNT(*) AS total,
+		   COUNT(*) FILTER (WHERE embedding IS NOT NULL) AS with_embed,
+		   COUNT(*) FILTER (WHERE created_at > now() - interval '24 hours') AS recent_total,
+		   COUNT(*) FILTER (WHERE created_at > now() - interval '24 hours' AND embedding IS NOT NULL) AS recent_embed
+		 FROM memories
+		 WHERE agent_id = $1`,
+		agentID,
+	).Scan(&h.Total, &h.WithEmbedding, &h.RecentTotal, &h.RecentEmbedded)
+	if err != nil {
+		return MemoryHealth{}, fmt.Errorf("pg: memory health: %w", err)
+	}
+	return h, nil
+}
+
+// VerifyVectorReady performs a one-shot health check that the
+// pgvector extension is loaded and the codec is wired correctly.
+// Cheap (single round-trip, no schema touch) so it can run on every
+// startup — silent failures of pgvector ("CREATE TABLE memories"
+// succeeds without the extension on some managed Postgres flavors,
+// but ORDER BY embedding <=> ... fails at query time) are exactly
+// the failure mode docs/memory-verification.md was written for.
+//
+// Returns nil when the extension answers a trivial vector op; any
+// error indicates the read path will not work and the caller should
+// degrade to MEMORY.md-only mode rather than letting the agent
+// silently lose access to its DB-backed memory.
+func (s *MemoryStore) VerifyVectorReady(ctx context.Context) error {
+	var ok int
+	if err := s.db.Pool.QueryRow(ctx,
+		`SELECT 1 WHERE '[1]'::vector <=> '[1]'::vector = 0`,
+	).Scan(&ok); err != nil {
+		return fmt.Errorf("pgvector readiness probe failed: %w", err)
+	}
+	if ok != 1 {
+		return fmt.Errorf("pgvector readiness probe returned unexpected result: %d", ok)
+	}
+	return nil
+}
+
 // InsertResearch stores a research data record collected by an agent.
 func (s *MemoryStore) InsertResearch(ctx context.Context, agentID, topic, content string, data map[string]any, embedding []float32, sourceURL string) (string, error) {
 	dataJSON, err := json.Marshal(data)

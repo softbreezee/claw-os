@@ -21,7 +21,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { testProvider, saveConfig } from "@/lib/api";
+import { testProvider, saveConfig, waitForGateway } from "@/lib/api";
 import { Logo } from "@/components/logo";
 
 // Provider presets shown in the onboard wizard. Keep the model lists
@@ -311,6 +311,15 @@ export default function OnboardPage() {
   // path swallowed the error and still threw confetti, which made
   // users think onboarding succeeded while pawnix.json was either
   // missing or invalid (Bug-7).
+  //
+  // After save succeeds we poll /api/status until `running === true`
+  // before redirecting (Bug-8 round 2). Without this the user gets a
+  // 3-second timer that may or may not coincide with the daemon
+  // actually finishing startup; on a cold boot with a slow PG migrate
+  // the redirect lands on a 404 or a half-loaded shell. The poll
+  // window is bounded so a genuinely-broken daemon doesn't trap the
+  // user on the launch screen forever — they see a clear error and
+  // a "go to chat anyway" escape hatch instead.
   const handleLaunch = useCallback(async () => {
     setLaunching(true);
     setLaunchError("");
@@ -326,15 +335,27 @@ export default function OnboardPage() {
       setShowConfetti(true);
       setLaunched(true);
       setTimeout(() => setShowConfetti(false), 4000);
-      setTimeout(() => {
-        // Use the same hostname the user is browsing onboard from,
-        // so a remote install doesn't try to redirect them to their
-        // own localhost (Bug-8).
-        const host = window.location.hostname || "localhost";
-        const port = config.port || window.location.port;
-        const proto = window.location.protocol || "http:";
-        window.location.href = `${proto}//${host}:${port}/chat/`;
-      }, 3000);
+
+      // Wait until the gateway daemon has finished restarting and
+      // the agent registry is populated. Status polling is cheap and
+      // resolves the race between save-config returning OK and the
+      // browser redirect landing on a not-yet-mounted /chat route.
+      const ready = await waitForGateway(20_000);
+      const host = window.location.hostname || "localhost";
+      const port = config.port || window.location.port;
+      const proto = window.location.protocol || "http:";
+      const target = `${proto}//${host}:${port}/chat/`;
+      if (!ready) {
+        setLaunchError(
+          "Saved your config, but the daemon is taking longer than expected to start. " +
+          "If /chat doesn't load, check the logs at ~/.pawnix/daemon.log.",
+        );
+      }
+      // Redirect either way — even on timeout the daemon is usually
+      // a few more seconds from being ready and the chat shell will
+      // refresh itself once it loads. Better than trapping the user
+      // on a stale onboarding screen.
+      window.location.href = target;
     } catch (err) {
       setLaunchError(
         err instanceof Error
@@ -362,6 +383,12 @@ export default function OnboardPage() {
         if (!(config.agentName.length > 0 && config.port > 0)) return false;
         // Postgres requires a DSN before we'll let the wizard advance.
         if (config.storageType === "postgres" && !config.storageDsn.trim()) {
+          return false;
+        }
+        // If the Telegram channel is enabled, a token is mandatory —
+        // saving with an empty token would silently disable Telegram
+        // on the backend (Bug-10 follow-up).
+        if (config.telegramEnabled && !config.telegramToken.trim()) {
           return false;
         }
         return true;
@@ -750,6 +777,51 @@ export default function OnboardPage() {
                   </p>
                 </div>
               )}
+
+              <Separator />
+
+              {/*
+                Telegram channel — onboard-time wiring of a Telegram bot.
+                The OnboardConfig already carries the fields and the
+                backend handler (saveConfigRequest.TelegramEnabled /
+                TelegramToken) acts on them; we just never rendered a UI
+                (Bug-10). Keeping it optional and behind a checkbox so
+                Web-only users aren't forced through the bot-token flow.
+              */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 cursor-pointer"
+                    checked={config.telegramEnabled}
+                    onChange={(e) =>
+                      updateConfig({ telegramEnabled: e.target.checked })
+                    }
+                  />
+                  Telegram bot{" "}
+                  <span className="text-xs text-muted-foreground">
+                    (optional)
+                  </span>
+                </Label>
+                {config.telegramEnabled && (
+                  <>
+                    <Input
+                      type="password"
+                      value={config.telegramToken}
+                      onChange={(e) =>
+                        updateConfig({ telegramToken: e.target.value })
+                      }
+                      placeholder="Bot token from @BotFather"
+                      className="font-mono text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Pawnix will validate the token with Telegram&apos;s{" "}
+                      <code>getMe</code> API on save. You can change or
+                      remove this later under Channels.
+                    </p>
+                  </>
+                )}
+              </div>
 
               <Separator />
 
