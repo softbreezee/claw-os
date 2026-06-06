@@ -293,6 +293,54 @@ func (s *Server) handleChatTaskCancel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// POST /api/chat/tasks/{id}/steer
+//
+// Body: {"text": "..."}
+//
+// Folds a mid-run user instruction into the in-flight task. The
+// agent loop drains the steer buffer at the next ReAct iteration
+// boundary so the message lands at the next tool-call decision
+// point — never mid-tool. Returns 409 when the target task is no
+// longer running (terminal or pending), so the client can fall back
+// to a regular /submit. See docs/v0.3-plan.md § Week 2.
+func (s *Server) handleChatTaskSteer(w http.ResponseWriter, r *http.Request) {
+	if !s.chatTaskWired() {
+		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{"error": "chat task subsystem not initialised"})
+		return
+	}
+	taskID := r.PathValue("id")
+	if taskID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "missing task id"})
+		return
+	}
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid body: " + err.Error()})
+		return
+	}
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "text is required"})
+		return
+	}
+	if err := s.chatRunner.Steer(taskID, text); err != nil {
+		if errors.Is(err, taskrunner.ErrTaskNotRunning) {
+			jsonResponse(w, http.StatusConflict, map[string]any{
+				"error": "task is not running; submit a new message instead",
+			})
+			return
+		}
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"taskId": taskID,
+	})
+}
+
 // GET /api/chat/tasks/{id}
 func (s *Server) handleGetChatTask(w http.ResponseWriter, r *http.Request) {
 	if !s.chatTaskWired() {

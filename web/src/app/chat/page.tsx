@@ -11,6 +11,7 @@ import {
   submitChat,
   subscribeTaskEvents,
   cancelTask,
+  steerTask,
   getTask,
   deleteChatSession,
   fileURL,
@@ -60,6 +61,7 @@ import {
   Eye,
   FileCode,
   Radio,
+  ListChecks,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -82,12 +84,24 @@ interface MessageAttachment {
 }
 
 interface ChatMessage {
+  // "steer" is a mid-run user supplemental instruction surfaced as a
+  // distinct bubble so the user can see what they queued and when the
+  // agent picked it up.
+  // "plan" is a /plan-mode response — a draft plan with Continue /
+  // Adjust action buttons in the bubble footer.
   id: string;
-  role: "user" | "agent" | "tool-group";
+  role: "user" | "agent" | "tool-group" | "steer" | "plan";
   content: string;
   timestamp: number;
   toolCalls?: ToolCall[];
   attachments?: MessageAttachment[];
+  // For steer bubbles only.
+  steerApplied?: boolean;
+  // For plan bubbles only: false while content_delta is still
+  // streaming, true after plan_proposed lands. Footer buttons are
+  // gated on this flag so the user can't click Continue against a
+  // half-streamed plan.
+  planFinalized?: boolean;
 }
 
 interface ChatSession {
@@ -734,6 +748,87 @@ export default function ChatPage() {
               });
               break;
             }
+            case "plan_started": {
+              // Open a fresh plan bubble; content_delta will fill it
+              // in. We pin a stable id on the runtime so subsequent
+              // delta events can find and append to it.
+              const planId = `p-${Date.now()}`;
+              r.curGroupId = planId;
+              r.curContent = "";
+              updateRuntime(key, (cur) => ({
+                ...cur,
+                messages: [
+                  ...cur.messages,
+                  {
+                    id: planId,
+                    role: "plan",
+                    content: "",
+                    timestamp: Date.now(),
+                    planFinalized: false,
+                  },
+                ],
+              }));
+              break;
+            }
+            case "content_delta": {
+              // Plan-mode streaming chunks. Same accumulator pattern
+              // as the regular `content` event but writes to the
+              // active plan bubble identified by curGroupId.
+              const delta = String(evt.data?.delta || "");
+              if (!delta) break;
+              r.curContent = (r.curContent || "") + delta;
+              const planId = r.curGroupId;
+              const accumulated = r.curContent;
+              updateRuntime(key, (cur) => ({
+                ...cur,
+                messages: cur.messages.map((m) =>
+                  m.id === planId && m.role === "plan"
+                    ? { ...m, content: accumulated }
+                    : m
+                ),
+              }));
+              break;
+            }
+            case "plan_proposed": {
+              // Terminal event for /plan: finalize the bubble so the
+              // Continue / Adjust footer renders. Body content is
+              // already accumulated from content_delta — we trust the
+              // delta stream as the source of truth and only flip the
+              // finalized flag here.
+              const planId = r.curGroupId;
+              updateRuntime(key, (cur) => ({
+                ...cur,
+                messages: cur.messages.map((m) =>
+                  m.id === planId && m.role === "plan"
+                    ? { ...m, planFinalized: true }
+                    : m
+                ),
+              }));
+              break;
+            }
+            case "steer_received": {
+              // Agent drained one of our queued steer messages into
+              // its messages list. Match the bubble by content (the
+              // simplest reliable key — taskID isn't on the bubble
+              // and we don't want to plumb a per-steer UUID through
+              // the runner just for this UI affordance) and flip
+              // steerApplied so the "queued" badge becomes "applied".
+              const text = String(evt.data?.text || "");
+              if (!text) break;
+              updateRuntime(key, (cur) => ({
+                ...cur,
+                messages: cur.messages.map((m) => {
+                  if (m.role !== "steer" || m.steerApplied) return m;
+                  if (m.content !== text) return m;
+                  return { ...m, steerApplied: true };
+                }),
+              }));
+              break;
+            }
+            // steer_queued is informational only (the runner ack of
+            // our POST /steer); the steer bubble was already
+            // optimistically rendered when the user hit Send. No
+            // additional UI action needed.
             // task_done / task_error / task_cancelled are handled in
             // the finally block below via runtime cleanup. We don't
             // need to surface them as messages.
@@ -773,10 +868,56 @@ export default function ChatPage() {
     // multimodal model.
     const hasAttachments = pendingFiles.length > 0;
     if ((!msg && !hasAttachments) || !selectedAgent) return;
-    // Per-tab guard: if THIS tab is already streaming, ignore. Other tabs
-    // are unaffected because each (agent, session) has its own runtime.
+    // Per-tab guard: if THIS tab is already streaming, route the
+    // input as a mid-run steer instead of bouncing it. The agent's
+    // ReAct loop drains the steer buffer at the next iteration
+    // boundary, so the message lands at the next tool-call decision
+    // point without interrupting an in-flight tool. See v0.3 plan §
+    // Week 2.
+    //
+    // Steer doesn't carry attachments — the model's vision pipeline
+    // is bound to the original turn; the practical UX is that
+    // attachments belong to a fresh /submit, not to mid-run notes.
     const key = rtKey(selectedAgent, sessionId);
-    if (runtimesRef.current[key]?.sending) return;
+    const cur = runtimesRef.current[key];
+    if (cur?.sending) {
+      if (cur.taskId && msg) {
+        setInput("");
+        const steerId = `s-${Date.now()}`;
+        updateRuntime(key, (r) => ({
+          ...r,
+          messages: [
+            ...r.messages,
+            {
+              id: steerId,
+              role: "steer",
+              content: msg,
+              timestamp: Date.now(),
+              steerApplied: false,
+            },
+          ],
+        }));
+        try {
+          await steerTask(cur.taskId, msg);
+        } catch (err) {
+          // Race: task finished between the user typing and the
+          // request landing. Mark the steer bubble with an error
+          // hint and let the user resend as a fresh message — we
+          // don't auto-retry because the task's done and the user
+          // probably wants a new turn anyway.
+          const failed = (err as Error)?.message === "TASK_NOT_RUNNING"
+            ? "(task finished — send as new message)"
+            : `(steer failed: ${(err as Error)?.message || "unknown"})`;
+          updateRuntime(key, (r) => ({
+            ...r,
+            messages: r.messages.map((m) =>
+              m.id === steerId ? { ...m, content: `${m.content}\n${failed}`, steerApplied: true } : m
+            ),
+          }));
+        }
+      }
+      return;
+    }
 
     setInput("");
     const agentForReq = selectedAgent;
@@ -1184,6 +1325,15 @@ export default function ChatPage() {
             {messages.map((msg) =>
               msg.role === "tool-group" ? (
                 <ToolCallGroup key={msg.id} msg={msg} />
+              ) : msg.role === "steer" ? (
+                <SteerBubble key={msg.id} msg={msg} />
+              ) : msg.role === "plan" ? (
+                <PlanBubble
+                  key={msg.id}
+                  msg={msg}
+                  onContinue={() => handleSend("go")}
+                  onAdjust={(planText) => setInput(planText)}
+                />
               ) : (
                 <MessageBubble
                   key={msg.id}
@@ -1294,7 +1444,13 @@ export default function ChatPage() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
-                placeholder={selectedAgent ? `Message ${selectedAgent}…` : "Select an agent first"}
+                placeholder={
+                  !selectedAgent
+                    ? "Select an agent first"
+                    : sending && current.taskId
+                      ? "Add a steer — it'll be picked up at the next step (won't interrupt the current tool)"
+                      : `Message ${selectedAgent}…`
+                }
                 disabled={!selectedAgent}
                 rows={1}
                 className="w-full resize-none bg-transparent px-4 pt-3 pb-2 text-[14px] leading-relaxed placeholder:text-muted-foreground/40 outline-none disabled:opacity-40"
@@ -1334,7 +1490,11 @@ export default function ChatPage() {
                     </select>
                   )}
                   <p className="text-[11px] text-muted-foreground/40 select-none truncate">
-                    {sending ? "Responding…" : "↵ Send  ·  ⇧↵ New line"}
+                    {sending && current.taskId
+                      ? "Responding…  ↵ Steer (queued for next step)"
+                      : sending
+                        ? "Responding…"
+                        : "↵ Send  ·  ⇧↵ New line"}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1436,15 +1596,38 @@ export default function ChatPage() {
                   </button>
 
                   {sending ? (
-                    <Button
-                      onClick={handleStop}
-                      size="sm"
-                      variant="outline"
-                      className="h-7 gap-1.5 text-xs text-destructive border-destructive/40 hover:bg-destructive/10 hover:border-destructive"
-                    >
-                      <Square className="h-3 w-3 fill-current" />
-                      Stop
-                    </Button>
+                    <>
+                      {/*
+                        Steer button — only visible when there's a
+                        running task to attach the message to AND the
+                        user has typed something. Pairs with the Stop
+                        button so the user has both "interrupt" and
+                        "augment" affordances. Clicking routes through
+                        handleSend, which checks the sending+taskId
+                        path and POSTs /steer instead of /submit.
+                      */}
+                      {current.taskId && input.trim() && (
+                        <Button
+                          onClick={() => handleSend()}
+                          size="sm"
+                          variant="outline"
+                          title="Queue a supplemental instruction for the next step"
+                          className="h-7 gap-1.5 text-xs border-primary/40 text-primary hover:bg-primary/10 hover:border-primary"
+                        >
+                          <Send className="h-3 w-3" />
+                          Steer
+                        </Button>
+                      )}
+                      <Button
+                        onClick={handleStop}
+                        size="sm"
+                        variant="outline"
+                        className="h-7 gap-1.5 text-xs text-destructive border-destructive/40 hover:bg-destructive/10 hover:border-destructive"
+                      >
+                        <Square className="h-3 w-3 fill-current" />
+                        Stop
+                      </Button>
+                    </>
                   ) : (
                     <Button
                       onClick={() => handleSend()}
@@ -2027,6 +2210,92 @@ function AttachmentTile({
     <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
       <FileText className="h-4 w-4 text-muted-foreground" />
       <span className="text-xs text-muted-foreground">{att.name || "file"}</span>
+    </div>
+  );
+}
+
+// ── Plan bubble ──────────────────────────────────────────────────────────────
+// /plan response — drafted plan with two action buttons:
+//   - Continue: send "go" as the next message to start execution
+//   - Adjust:   put the plan back in the input box for the user to edit
+// The footer only appears once planFinalized flips (after plan_proposed
+// lands). While streaming, only the body renders.
+function PlanBubble({
+  msg,
+  onContinue,
+  onAdjust,
+}: {
+  msg: ChatMessage;
+  onContinue: () => void;
+  onAdjust: (planText: string) => void;
+}) {
+  return (
+    <div className="flex justify-start py-1">
+      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-500/10 mt-0.5 mr-2">
+        <ListChecks className="h-3.5 w-3.5 text-blue-500" />
+      </div>
+      <div className="flex-1 max-w-[78%] rounded-2xl rounded-bl-sm border border-blue-500/30 bg-blue-500/5 px-4 py-3">
+        <div className="mb-1.5 flex items-center gap-2 text-[10px] uppercase tracking-wider text-blue-500/80">
+          <span>plan</span>
+          {!msg.planFinalized && (
+            <span className="rounded-full bg-blue-500/15 px-1.5 py-0.5 text-blue-500">
+              drafting…
+            </span>
+          )}
+        </div>
+        <div className="text-[14px] leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-1">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content || "…"}</ReactMarkdown>
+        </div>
+        {msg.planFinalized && (
+          <div className="mt-3 flex items-center gap-2 border-t border-blue-500/20 pt-2.5">
+            <Button
+              size="sm"
+              onClick={onContinue}
+              className="h-7 gap-1.5 text-xs"
+              title="Send 'go' to start executing this plan"
+            >
+              ▶ 继续执行
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onAdjust(msg.content)}
+              className="h-7 gap-1.5 text-xs"
+              title="Put the plan in the input box so you can edit it"
+            >
+              ✎ 调整方案
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Steer bubble ─────────────────────────────────────────────────────────────
+// Mid-run user instruction. Renders right-aligned (it's user-originated)
+// with a smaller, dashed look so it visually reads as "annotation on
+// the running turn" rather than a fresh user turn. Status badge flips
+// from "queued" to "applied" when the agent emits steer_received.
+function SteerBubble({ msg }: { msg: ChatMessage }) {
+  const applied = msg.steerApplied === true;
+  return (
+    <div className="flex justify-end py-0.5">
+      <div className="max-w-[78%] rounded-2xl rounded-br-sm border border-dashed border-primary/40 bg-primary/5 px-3.5 py-2 text-[13px] leading-relaxed text-foreground/80">
+        <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider">
+          <span className="text-primary/80">↳ steer</span>
+          <span
+            className={
+              applied
+                ? "rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-emerald-600 dark:text-emerald-400"
+                : "rounded-full bg-amber-500/15 px-1.5 py-0.5 text-amber-600 dark:text-amber-400"
+            }
+          >
+            {applied ? "applied" : "queued"}
+          </span>
+        </div>
+        <div className="whitespace-pre-wrap">{msg.content}</div>
+      </div>
     </div>
   );
 }

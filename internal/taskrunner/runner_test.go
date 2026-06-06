@@ -2,6 +2,7 @@ package taskrunner
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,12 @@ type fakeAgent struct {
 func (f *fakeAgent) HandleWebChatStream(ctx context.Context, sessionID, text string, events chan<- agent.ChatEvent) string {
 	return f.behaviour(ctx, sessionID, text, events)
 }
+
+// SendToChat is part of AgentHandle but unused by these tests — the
+// fakeAgent is only exercised through HandleWebChatStream. Stubbed
+// out as a no-op so the type continues to satisfy AgentHandle as
+// the interface grows (cross-channel reply / mirroring features).
+func (f *fakeAgent) SendToChat(_ context.Context, _, _, _ string) error { return nil }
 
 type fakeResolver struct{ ag AgentHandle }
 
@@ -271,6 +278,123 @@ func TestRunner_Cancel(t *testing.T) {
 	rec, _ := st.GetChatTask(context.Background(), store.DefaultTenantID, taskID)
 	if rec.Status != store.ChatTaskCancelled {
 		t.Fatalf("status=%q, want cancelled", rec.Status)
+	}
+}
+
+// Steer on a running task pushes the message into the per-task buffer
+// the agent loop drains on the next ReAct iteration. End-to-end check:
+// the agent sees the steer text in its ctx-attached buffer, and a
+// `steer_queued` event lands on the task's event topic.
+func TestRunner_Steer(t *testing.T) {
+	st := newMemStore()
+	bus := eventbus.NewMemoryBus()
+	defer bus.Close()
+
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	gotSteer := make(chan []agent.SteerMessage, 1)
+	ag := &fakeAgent{
+		behaviour: func(ctx context.Context, sid, text string, events chan<- agent.ChatEvent) string {
+			close(started)
+			// Block until the test signals "now drain", so we can race
+			// the Steer call into the buffer first — same shape as the
+			// real loop draining between ReAct iterations.
+			<-finish
+			buf := agent.SteerBufferFromContext(ctx)
+			if buf != nil {
+				gotSteer <- buf.Drain()
+			} else {
+				gotSteer <- nil
+			}
+			return "ok"
+		},
+	}
+	r := New(st, bus, &fakeResolver{ag: ag}, Options{Timeout: 5 * time.Second})
+	defer r.Stop()
+
+	taskID, err := r.Submit(context.Background(), "agent-1", "sess-1", "go", "")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	ch, cancel := bus.Subscribe(TopicFor(taskID))
+	defer cancel()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent never started")
+	}
+
+	// Steer while the agent is mid-turn. The buffer must take the
+	// message; ErrTaskNotRunning would mean the runner failed to
+	// install the buffer onto inflight before run() reached the
+	// agent.
+	if err := r.Steer(taskID, "focus on energy stocks"); err != nil {
+		t.Fatalf("Steer in-flight returned %v", err)
+	}
+	close(finish)
+
+	select {
+	case msgs := <-gotSteer:
+		if len(msgs) != 1 || msgs[0].Text != "focus on energy stocks" {
+			t.Fatalf("agent saw %+v, want one steer with our text", msgs)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent never reported steer drain")
+	}
+
+	evts := collectEvents(ch, 1*time.Second)
+	var sawSteerQueued bool
+	for _, e := range evts {
+		if e.Type == "steer_queued" {
+			sawSteerQueued = true
+			break
+		}
+	}
+	if !sawSteerQueued {
+		t.Fatalf("no steer_queued event in %+v", evts)
+	}
+}
+
+// Steering a task that already finished returns ErrTaskNotRunning so
+// the HTTP layer can map it to 409 and the client can fall back to
+// /submit. We force "already done" by waiting for HandleWebChatStream
+// to return before calling Steer.
+func TestRunner_Steer_NotRunning(t *testing.T) {
+	st := newMemStore()
+	bus := eventbus.NewMemoryBus()
+	defer bus.Close()
+
+	ag := &fakeAgent{
+		behaviour: func(ctx context.Context, sid, text string, events chan<- agent.ChatEvent) string {
+			return "done"
+		},
+	}
+	r := New(st, bus, &fakeResolver{ag: ag}, Options{Timeout: 5 * time.Second})
+	defer r.Stop()
+
+	taskID, err := r.Submit(context.Background(), "agent-1", "sess-1", "go", "")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	// Wait for the task to drain to a terminal state. Polling beats
+	// a fixed sleep; the Cancel test next door uses the same pattern.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		rec, _ := st.GetChatTask(context.Background(), store.DefaultTenantID, taskID)
+		if rec != nil && (rec.Status == store.ChatTaskDone || rec.Status == store.ChatTaskFailed) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	err = r.Steer(taskID, "too late")
+	if err == nil {
+		t.Fatalf("Steer on finished task should have returned ErrTaskNotRunning")
+	}
+	if !errors.Is(err, ErrTaskNotRunning) {
+		t.Fatalf("Steer err = %v, want ErrTaskNotRunning", err)
 	}
 }
 

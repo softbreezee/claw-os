@@ -682,8 +682,17 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		ChatID:    msg.ChatID,
 	})
 
-	// Check for slash commands first
+	// Check for slash commands first.
+	//
+	// /plan is a special slash that doesn't have a static reply: it
+	// streams a plan-only LLM response back through the same chat
+	// event channel. The slash handler doesn't have the streaming
+	// context wired in, so we hop here and call handlePlanMode with
+	// the parsed task text. See internal/agent/plan.go.
 	if result := a.handleSlashCommand(msg); result.handled {
+		if result.planTask != "" {
+			return a.handlePlanMode(ctx, msg, result.planTask)
+		}
 		emitEvent(ctx, ChatEvent{Type: "content", Data: map[string]any{"content": result.reply}})
 		emitEvent(ctx, ChatEvent{Type: "done"})
 		return result.reply
@@ -697,9 +706,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// chat history (which would show the cron prompt as if you typed
 	// it) or the JSONL/PG session log.
 	var sess *session.Session
-	isInternalOrigin := msg.Origin == "cron" ||
-		msg.Origin == "webhook" ||
-		msg.Origin == "internal"
+	isInternalOrigin := bus.IsRuntimeInjected(msg.Origin)
 	if isInternalOrigin {
 		sess = session.NewEphemeralSession()
 	} else {
@@ -830,6 +837,17 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 			"channel", msg.Channel,
 			"chat_id", msg.ChatID,
 		)
+
+		// Mid-run steering — see streaming variant below for the full
+		// rationale. Mirrored here so cron-fired / IM-channel turns
+		// (which go through the non-streaming path) also benefit.
+		var steered int
+		messages, steered = drainSteerIntoMessages(ctx, messages)
+		if steered > 0 {
+			slog.Info("steer drained into messages",
+				"agent", a.name, "iteration", i+1, "count", steered)
+			sess.Append(messages[len(messages)-1])
+		}
 
 		// Hook: BeforeModelCall
 		hcBefore := &HookContext{AgentName: a.name, Point: BeforeModelCall, Messages: messages}
@@ -1168,8 +1186,20 @@ func (a *Agent) runPostTurn(ctx context.Context, messages []provider.Message, to
 // a StreamReader for the final response. Tool call iterations use non-streaming Chat;
 // the final text response uses ChatStream for true SSE streaming.
 func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage) *provider.StreamReader {
-	// Reuse setup logic from HandleMessage
+	// Reuse setup logic from HandleMessage. /plan is special — see
+	// HandleMessage's note for rationale. handlePlanMode emits its
+	// own content events on ctx; we wrap its final string into a
+	// StreamReader so this entry's signature stays unchanged.
 	if result := a.handleSlashCommand(msg); result.handled {
+		if result.planTask != "" {
+			final := a.handlePlanMode(ctx, msg, result.planTask)
+			ch := make(chan provider.StreamChunk, 2)
+			go func() {
+				ch <- provider.StreamChunk{Content: final, Done: true}
+				close(ch)
+			}()
+			return provider.NewStreamReader(ch)
+		}
 		ch := make(chan provider.StreamChunk, 2)
 		go func() {
 			ch <- provider.StreamChunk{Content: result.reply, Done: true}
@@ -1253,6 +1283,21 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 
 	// ReAct loop - use Chat for tool iterations
 	for i := 0; i < a.maxToolIterations; i++ {
+		// Drain any user-steer messages queued while the previous
+		// iteration was running. Folded into messages as a single
+		// user-tagged "supplemental instructions" block so the model
+		// reads them at the same priority as fresh user input but
+		// understands they arrived mid-turn. Mirror into the session
+		// so reload (refresh / cross-tab) shows the steer in history
+		// rather than only the implicit pivot. See steer.go.
+		var steered int
+		messages, steered = drainSteerIntoMessages(ctx, messages)
+		if steered > 0 {
+			slog.Info("steer drained into messages",
+				"agent", a.name, "iteration", i+1, "count", steered)
+			sess.Append(messages[len(messages)-1])
+		}
+
 		hcBefore := &HookContext{AgentName: a.name, Point: BeforeModelCall, Messages: messages}
 		a.hooks.Run(ctx, hcBefore)
 

@@ -315,7 +315,7 @@ export async function sendChat(agentId: string, sessionId: string, message: stri
 
 // ChatStreamEvent is a single SSE event from the chat task subsystem.
 // task_* events mark lifecycle transitions; content / tool_call / tool_result
-// stream agent output.
+// stream agent output; steer_* events surface mid-run user steering.
 export interface ChatStreamEvent {
   type:
     | "content"
@@ -326,7 +326,25 @@ export interface ChatStreamEvent {
     | "task_running"
     | "task_done"
     | "task_error"
-    | "task_cancelled";
+    | "task_cancelled"
+    // steer_queued — taskrunner accepted a POST /steer; bubble was
+    // already optimistically rendered, no extra UI action needed.
+    | "steer_queued"
+    // steer_received — agent drained the steer into its messages
+    // list at a ReAct iteration boundary. UI flips the bubble badge
+    // from queued → applied.
+    | "steer_received"
+    // plan_started — model began drafting a /plan response. UI uses
+    // this to start a plan bubble (separate from regular agent
+    // bubbles so it can render the Continue/Adjust footer).
+    | "plan_started"
+    // content_delta — incremental plan text. Accumulates into the
+    // active plan bubble's body.
+    | "content_delta"
+    // plan_proposed — terminal event for /plan with the final plan
+    // text. UI swaps the streaming-state bubble for a finalized
+    // plan card with Continue / Adjust action buttons.
+    | "plan_proposed";
   data?: Record<string, string>;
   // Monotonic per-task sequence – used for resumable subscriptions.
   seq?: number;
@@ -487,6 +505,44 @@ export async function cancelTask(taskId: string): Promise<{ ok: boolean }> {
     method: "POST",
   });
   if (!res.ok) throw new Error(`cancel failed: ${res.status}`);
+  return res.json();
+}
+
+// steerTask folds a mid-run user instruction into an in-flight task.
+// The agent's ReAct loop drains the steer buffer at the next iteration
+// boundary — so the message lands at the next tool-call decision
+// point, never mid-tool. See internal/agent/steer.go for the contract
+// surfaced to the model.
+//
+// Returns:
+//   { ok: true }   — accepted, will be picked up at next iteration
+//   throws "TASK_NOT_RUNNING" — task already terminal or never started;
+//                              caller should fall back to submitChat
+//   throws other Error on transport / 5xx failures
+//
+// The TASK_NOT_RUNNING sentinel is a discriminated string the chat
+// page checks via `err.message === "TASK_NOT_RUNNING"` to decide the
+// fallback path; we don't define a typed error class because that's
+// a heavier abstraction than this single call site needs.
+export async function steerTask(taskId: string, text: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/chat/tasks/${encodeURIComponent(taskId)}/steer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (res.status === 409) {
+    throw new Error("TASK_NOT_RUNNING");
+  }
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const j = (await res.json()) as { error?: string };
+      if (j?.error) detail = `: ${j.error}`;
+    } catch {
+      /* response not JSON, fall through */
+    }
+    throw new Error(`steer failed: ${res.status}${detail}`);
+  }
   return res.json();
 }
 

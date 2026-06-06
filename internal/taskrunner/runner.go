@@ -100,12 +100,16 @@ type eventHistory struct {
 	nextSeq int64            // next seq to assign (1-based, never reused)
 }
 
-// runningTask holds the cancel func of a task currently being executed,
-// so POST /api/chat/tasks/:id/cancel can interrupt it. Pending tasks
-// (waiting in the per-session queue) don't need this; they're cancelled
-// by setting their status before the worker picks them up.
+// runningTask holds the cancel func + steer buffer of a task currently
+// being executed, so the HTTP layer can interrupt it (POST
+// /api/chat/tasks/:id/cancel) or fold mid-run user instructions into
+// it (POST /api/chat/steer). Pending tasks (waiting in the per-session
+// queue) don't need either — they get cancelled by setting their
+// status before the worker picks them up, and steers can't apply to
+// a turn that hasn't started.
 type runningTask struct {
 	cancel context.CancelFunc
+	steer  *agent.SteerBuffer
 }
 
 // Options tweaks Runner behaviour. Zero values are sensible defaults.
@@ -341,6 +345,45 @@ func (r *Runner) Cancel(ctx context.Context, taskID string) error {
 	return nil
 }
 
+// ErrTaskNotRunning is returned by Steer when the target task is no
+// longer in-flight (already terminal, never existed, or still
+// pending in a queue). HTTP handlers map this to a 409 so clients
+// can retry the action as a fresh /submit.
+var ErrTaskNotRunning = errors.New("taskrunner: task is not running")
+
+// Steer folds a mid-run user instruction into the in-flight task's
+// next ReAct iteration. The agent loop drains the buffer at each
+// iteration boundary so the message lands at the next tool-call
+// decision point, never mid-tool. See internal/agent/steer.go for
+// the contract surfaced to the model.
+//
+// Returns ErrTaskNotRunning when the task isn't currently executing
+// — pending tasks haven't started yet (resubmit instead) and
+// terminal tasks are over (the user can just send a new message).
+//
+// We intentionally don't pre-fetch from the store here: the
+// authoritative "is this task in-flight" signal lives in r.inflight,
+// not in the persisted status (which lags by a few ms during state
+// transitions and would race with run()'s status-write).
+func (r *Runner) Steer(taskID, text string) error {
+	if text == "" {
+		return errors.New("taskrunner: empty steer text")
+	}
+	r.mu.Lock()
+	rt, running := r.inflight[taskID]
+	r.mu.Unlock()
+	if !running || rt.steer == nil {
+		return ErrTaskNotRunning
+	}
+	rt.steer.Push(text)
+	r.publishEvent(context.Background(), taskID, eventbus.Event{
+		Type:      "steer_queued",
+		Data:      map[string]any{"taskId": taskID, "text": text},
+		Timestamp: time.Now().UTC(),
+	})
+	return nil
+}
+
 func isTerminal(s store.ChatTaskStatus) bool {
 	switch s {
 	case store.ChatTaskDone, store.ChatTaskFailed, store.ChatTaskCancelled:
@@ -377,8 +420,10 @@ func (r *Runner) run(rec *store.ChatTaskRecord) {
 	// here rather than at enqueue time so a CancelBeforeRun task doesn't
 	// leak into the map. effectiveModel inside agent.HandleMessage will
 	// pick this up via ContextWithModel.
+	steerBuf := agent.NewSteerBuffer()
+	taskCtx = agent.ContextWithSteerBuffer(taskCtx, steerBuf)
 	r.mu.Lock()
-	r.inflight[rec.ID] = &runningTask{cancel: taskCancel}
+	r.inflight[rec.ID] = &runningTask{cancel: taskCancel, steer: steerBuf}
 	if model, ok := r.pendingModels[rec.ID]; ok {
 		taskCtx = agent.ContextWithModel(taskCtx, model)
 		delete(r.pendingModels, rec.ID)

@@ -12,9 +12,25 @@ import (
 )
 
 // slashResult holds the result of a slash command.
+//
+// Most slashes set just `handled` + `reply` and return synchronously.
+// `/plan` is special: it doesn't have a static reply — it spawns a
+// plan-only LLM call that streams text back to the user. Rather than
+// teaching slash dispatch to invoke the provider directly (slash runs
+// before sessions / hooks / events are wired the same way as a normal
+// turn), we tag the result with `planTask` so the loop entry point
+// reroutes to handlePlanMode after slash dispatch returns.
 type slashResult struct {
 	handled bool
 	reply   string
+
+	// planTask, when non-empty, signals "this slash invoked /plan with
+	// the given task description". The agent loop handler must then
+	// run handlePlanMode against that task instead of the original
+	// message. handled is left true so slash dispatch terminates
+	// normally; the caller branches on planTask before consuming
+	// reply.
+	planTask string
 }
 
 // handleSlashCommand checks if the message is a slash command and handles it.
@@ -82,6 +98,9 @@ func (a *Agent) handleSlashCommand(msg bus.InboundMessage) slashResult {
 		}
 		return a.slashModel(msg, args[0])
 
+	case "/plan":
+		return a.slashPlan(msg, args)
+
 	case "/help":
 		return slashResult{handled: true, reply: a.slashHelp()}
 
@@ -90,6 +109,30 @@ func (a *Agent) handleSlashCommand(msg bus.InboundMessage) slashResult {
 
 	default:
 		return slashResult{}
+	}
+}
+
+// slashPlan handles `/plan <task>` — a one-shot plan-only turn the
+// user reviews before any tool runs. We don't call the LLM here
+// (slash dispatch happens before the streaming context is fully wired
+// in HandleMessageStream). Instead we hand the parsed task text back
+// to the loop entry via slashResult.planTask, and the loop reroutes
+// to handlePlanMode for the actual streaming + session append.
+//
+// Empty / whitespace task returns a usage hint with no plan-mode
+// trigger. Otherwise reply stays empty — the streaming plan content
+// IS the user-visible reply, no scaffolding bubble.
+func (a *Agent) slashPlan(_ bus.InboundMessage, args []string) slashResult {
+	task := strings.TrimSpace(strings.Join(args, " "))
+	if task == "" {
+		return slashResult{
+			handled: true,
+			reply:   "Usage: `/plan <what you want to accomplish>`\n\nDrafts a plan you can review before any tool runs.",
+		}
+	}
+	return slashResult{
+		handled:  true,
+		planTask: task,
 	}
 }
 
@@ -374,6 +417,7 @@ Conversation
   /new, /reset    — Clear session history
   /retry          — Re-run last message
   /undo           — Undo last turn
+  /plan <task>    — Draft a plan you can review before any tool runs
 
 Context
   /compact        — Compress context window
