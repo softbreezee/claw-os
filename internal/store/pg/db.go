@@ -110,6 +110,29 @@ func (db *DB) Migrate(ctx context.Context) error {
 			ddl         TEXT        NOT NULL,
 			created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+
+		// agent_goals backs the /goal feature: one persistent objective
+		// per (agent, session). The UNIQUE (agent_id, session_key)
+		// constraint is the source of truth for "this session already
+		// has a goal" — CreateGoal translates the conflict into
+		// ErrGoalAlreadyExists. Routing fields (channel, chat_id) are
+		// stamped at create time so a continuation can publish onto
+		// the same bus address the original turn arrived on.
+		`CREATE TABLE IF NOT EXISTS agent_goals (
+			id           TEXT        PRIMARY KEY,
+			agent_id     TEXT        NOT NULL,
+			session_key  TEXT        NOT NULL,
+			channel      TEXT        NOT NULL DEFAULT '',
+			chat_id      TEXT        NOT NULL DEFAULT '',
+			objective    TEXT        NOT NULL,
+			status       TEXT        NOT NULL DEFAULT 'active',
+			token_budget BIGINT,
+			tokens_used  BIGINT      NOT NULL DEFAULT 0,
+			created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS agent_goals_session
+			ON agent_goals (agent_id, session_key)`,
 	}
 
 	for _, stmt := range stmts {

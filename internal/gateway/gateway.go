@@ -110,8 +110,13 @@ func New(cfg *config.Config) (*Gateway, error) {
 					DBQuerier:       db,
 					SchemaRegistrar: db,
 				}
+				// Goal store wiring — drives the /goal slash family.
+				// Adapter layer keeps internal/agent free of pg
+				// imports; same pattern as memstore_adapter above.
+				goalStore := &goalStoreAdapter{inner: pgstore.NewGoalStore(db)}
 				for _, ag := range agentMgr.All() {
 					ag.SetPGBackend(pgBackend)
+					ag.SetGoalStore(goalStore)
 				}
 			}
 		}

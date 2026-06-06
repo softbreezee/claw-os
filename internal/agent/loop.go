@@ -13,6 +13,7 @@ import (
 
 	"github.com/codeany-ai/open-agent-sdk-go/costtracker"
 
+	"github.com/softbreezee/claw-os/internal/agent/goal"
 	"github.com/softbreezee/claw-os/internal/agent/tools"
 	"github.com/softbreezee/claw-os/internal/bus"
 	"github.com/softbreezee/claw-os/internal/config"
@@ -64,6 +65,13 @@ type Agent struct {
 	costTracker       *costtracker.Tracker
 	compactionCount   int // number of times the context has been compacted this session
 	compactionMu      sync.Mutex
+
+	// goalStore is the persistence layer for /goal — wired by the
+	// gateway when the PG backend is configured. nil = "/goal feature
+	// disabled" (file-only deploy). All goal-aware paths must guard
+	// on this; treating nil as "feature disabled" rather than panic
+	// keeps the agent functional for users who haven't opted into PG.
+	goalStore goal.Store
 }
 
 // getProvider safely reads the current LLM provider.
@@ -89,6 +97,22 @@ func (a *Agent) SetProviderRegistry(reg *provider.Registry) {
 	a.providerMu.Lock()
 	defer a.providerMu.Unlock()
 	a.providerRegistry = reg
+}
+
+// SetGoalStore wires the persistence layer for /goal. nil disables
+// the feature for this agent (which is fine for file-only deploys).
+// Called by the gateway after PG migrations succeed.
+func (a *Agent) SetGoalStore(st goal.Store) {
+	a.goalStore = st
+}
+
+// sessionKeyFor returns the persistent session key used as the
+// (agent_id, session_key) lookup target for /goal. claw-os keys a
+// session by (channel, chat_id) — same shape Memory uses; reusing
+// it keeps the goal row aligned with the chat surface the user is
+// actually talking to.
+func (a *Agent) sessionKeyFor(msg bus.InboundMessage) string {
+	return msg.Channel + ":" + msg.ChatID
 }
 
 // effectiveProvider returns the provider that should serve the next
@@ -890,6 +914,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 			emitEvent(ctx, ChatEvent{Type: "content", Data: map[string]any{"content": resp.Content}})
 			emitEvent(ctx, ChatEvent{Type: "done"})
 			a.runPostTurn(ctx, messages, totalToolCalls)
+			a.maybeFireGoalContinuation(ctx, msg)
 			return resp.Content
 		}
 
@@ -1012,6 +1037,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	}
 
 	a.runPostTurn(ctx, messages, totalToolCalls)
+	a.maybeFireGoalContinuation(ctx, msg)
 	slog.Warn("max tool iterations reached", "agent", a.name, "max", a.maxToolIterations)
 	return "I've reached the maximum number of tool iterations. Here's what I have so far."
 }
@@ -1354,6 +1380,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 				sess.Append(provider.Message{Role: "assistant", Content: finalContent})
 				capturedMessages = append(capturedMessages, provider.Message{Role: "assistant", Content: finalContent})
 				a.runPostTurn(ctx, capturedMessages, capturedToolCalls)
+				a.maybeFireGoalContinuation(ctx, msg)
 			}()
 			return outReader
 		}

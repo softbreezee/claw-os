@@ -101,6 +101,9 @@ func (a *Agent) handleSlashCommand(msg bus.InboundMessage) slashResult {
 	case "/plan":
 		return a.slashPlan(msg, args)
 
+	case "/goal":
+		return a.slashGoal(msg, args)
+
 	case "/help":
 		return slashResult{handled: true, reply: a.slashHelp()}
 
@@ -418,6 +421,8 @@ Conversation
   /retry          — Re-run last message
   /undo           — Undo last turn
   /plan <task>    — Draft a plan you can review before any tool runs
+  /goal <task>    — Set a multi-turn goal the agent keeps pursuing
+  /goal pause | resume | clear — manage the active goal
 
 Context
   /compact        — Compress context window
