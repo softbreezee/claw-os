@@ -517,9 +517,9 @@ func (a *Agent) HookRegistry() *HookRegistry {
 	return a.hooks
 }
 
-// RegisterWebSearchTool registers the web_search tool with the given API key.
-func (a *Agent) RegisterWebSearchTool(apiKey string) {
-	tools.RegisterWebSearch(a.registry, apiKey)
+// RegisterWebSearchTool registers the web_search tool.
+func (a *Agent) RegisterWebSearchTool(provider, apiKey string) {
+	tools.RegisterWebSearch(a.registry, provider, apiKey)
 }
 
 // Sessions returns the session manager for this agent.

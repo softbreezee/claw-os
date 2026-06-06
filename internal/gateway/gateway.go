@@ -249,10 +249,14 @@ func New(cfg *config.Config) (*Gateway, error) {
 
 	// Register web search tool for all agents if configured
 	if cfg.WebSearch.APIKey != "" {
-		for _, ag := range agentMgr.All() {
-			ag.RegisterWebSearchTool(cfg.WebSearch.APIKey)
+		provider := cfg.WebSearch.Provider
+		if provider == "" {
+			provider = "brave" // backward compat
 		}
-		slog.Info("web search registered", "provider", cfg.WebSearch.Provider)
+		for _, ag := range agentMgr.All() {
+			ag.RegisterWebSearchTool(provider, cfg.WebSearch.APIKey)
+		}
+		slog.Info("web search registered", "provider", provider)
 	}
 
 	// Register sub-agent spawner for all agents
