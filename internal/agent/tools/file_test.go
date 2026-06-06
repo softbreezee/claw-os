@@ -157,3 +157,121 @@ func TestReadFile_DirectoryTarget_Rejected(t *testing.T) {
 		t.Fatalf("error should suggest list_dir, got: %v", err)
 	}
 }
+
+// ─── edit_file tests ───────────────────────────────────────────────────
+
+// TestApplyEdit_SingleMatch replaces one unique occurrence.
+func TestApplyEdit_SingleMatch(t *testing.T) {
+	content := "line1\nline2\nline3"
+	got, count, err := applyEdit("test.txt", content, "line2", "replaced", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+	if got != "line1\nreplaced\nline3" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// TestApplyEdit_EmptyOldString is rejected.
+func TestApplyEdit_EmptyOldString(t *testing.T) {
+	_, _, err := applyEdit("test.txt", "content", "", "new", false)
+	if err == nil {
+		t.Fatal("expected error for empty old_string")
+	}
+	if !strings.Contains(err.Error(), "old_string is empty") {
+		t.Fatalf("error should mention empty old_string, got: %v", err)
+	}
+}
+
+// TestApplyEdit_SameOldNew is rejected.
+func TestApplyEdit_SameOldNew(t *testing.T) {
+	_, _, err := applyEdit("test.txt", "content", "same", "same", false)
+	if err == nil {
+		t.Fatal("expected error for identical old/new")
+	}
+	if !strings.Contains(err.Error(), "new_string must differ from old_string") {
+		t.Fatalf("error should mention new_string must differ, got: %v", err)
+	}
+}
+
+// TestApplyEdit_NotFound reports the path.
+func TestApplyEdit_NotFound(t *testing.T) {
+	_, _, err := applyEdit("/tmp/foo.txt", "content", "missing", "replacement", false)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("error should mention not found, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "/tmp/foo.txt") {
+		t.Fatalf("error should include path, got: %v", err)
+	}
+}
+
+// TestApplyEdit_MultipleMatchesWithoutReplaceAll rejects ambiguous edits.
+func TestApplyEdit_MultipleMatchesWithoutReplaceAll(t *testing.T) {
+	content := "same line\nsame line\nother"
+	_, _, err := applyEdit("test.txt", content, "same line", "new line", false)
+	if err == nil {
+		t.Fatal("expected error for multiple matches")
+	}
+	if !strings.Contains(err.Error(), "matches 2 locations") {
+		t.Fatalf("error should mention count and location, got: %v", err)
+	}
+}
+
+// TestApplyEdit_ReplaceAll replaces every occurrence.
+func TestApplyEdit_ReplaceAll(t *testing.T) {
+	content := "x x x"
+	got, count, err := applyEdit("test.txt", content, "x", "y", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("count = %d, want 3", count)
+	}
+	if got != "y y y" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// TestEditFile_ToolRoundTrip writes a file, edits it, and reads back.
+func TestEditFile_ToolRoundTrip(t *testing.T) {
+	ws := t.TempDir()
+	path := "notes.md"
+
+	// Create a file first
+	_, err := callTool(t, ws, "write_file", map[string]any{
+		"path": path, "content": "# Title\n\nold paragraph\n\n# Footer",
+	})
+	if err != nil {
+		t.Fatalf("write_file: %v", err)
+	}
+
+	// Edit it
+	out, err := callTool(t, ws, "edit_file", map[string]any{
+		"path": path, "old_string": "old paragraph", "new_string": "new paragraph",
+	})
+	if err != nil {
+		t.Fatalf("edit_file: %v", err)
+	}
+	fullPath := filepath.Join(ws, path)
+	if !strings.Contains(out, fullPath) {
+		t.Fatalf("output should reference path, got: %s", out)
+	}
+
+	// Read back
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !strings.Contains(string(data), "new paragraph") {
+		t.Fatalf("content should contain new paragraph, got: %s", string(data))
+	}
+	if strings.Contains(string(data), "old paragraph") {
+		t.Fatal("content should not contain old paragraph")
+	}
+}

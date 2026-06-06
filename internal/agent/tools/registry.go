@@ -128,4 +128,5 @@ func (r *Registry) registerBuiltins(workspace string) {
 	registerExec(r, workspace)
 	registerFile(r, workspace)
 	registerMessage(r)
+	registerApplyPatch(r)
 }

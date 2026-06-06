@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,6 +38,13 @@ type writeFileArgs struct {
 
 type listDirArgs struct {
 	Path string `json:"path"`
+}
+
+type editFileArgs struct {
+	Path       string `json:"path"`
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
 func registerFile(r *Registry, workspace string) {
@@ -76,6 +84,53 @@ func registerFile(r *Registry, workspace string) {
 		},
 		"required": []string{"path"},
 	}, makeListDir(workspace))
+
+	editDesc := "Replace an exact string in a file with another. old_string must occur exactly once; add surrounding context to disambiguate. Use for targeted edits instead of rewriting the whole file."
+	r.Register("edit_file", editDesc, map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"path": map[string]interface{}{
+				"type":        "string",
+				"description": "File path (relative to workspace or absolute)",
+			},
+			"old_string": map[string]interface{}{
+				"type":        "string",
+				"description": "Exact text to replace. Must match a unique substring unless replace_all is true.",
+			},
+			"new_string": map[string]interface{}{
+				"type":        "string",
+				"description": "Replacement text. Must differ from old_string.",
+			},
+			"replace_all": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Replace every occurrence instead of requiring uniqueness. Defaults to false.",
+			},
+		},
+		"required": []string{"path", "old_string", "new_string"},
+	}, makeEditFile(workspace))
+}
+
+// applyEdit replaces oldStr with newStr in content, enforcing the
+// single-match-or-replaceAll semantics that make edit_file a safe
+// targeted-edit tool instead of a blind sledgehammer.
+func applyEdit(path, content, oldStr, newStr string, replaceAll bool) (string, int, error) {
+	if oldStr == "" {
+		return "", 0, fmt.Errorf("edit_file: old_string is empty (use write_file to create a file)")
+	}
+	if oldStr == newStr {
+		return "", 0, fmt.Errorf("edit_file: new_string must differ from old_string")
+	}
+	count := strings.Count(content, oldStr)
+	if count == 0 {
+		return "", 0, fmt.Errorf("edit_file: old_string not found in %s — re-read the file and copy the exact text (whitespace/indentation matters)", path)
+	}
+	if count > 1 && !replaceAll {
+		return "", 0, fmt.Errorf("edit_file: old_string matches %d locations in %s — provide more surrounding context to make it unique, or set replace_all=true", count, path)
+	}
+	if replaceAll {
+		return strings.ReplaceAll(content, oldStr, newStr), count, nil
+	}
+	return strings.Replace(content, oldStr, newStr, 1), 1, nil
 }
 
 // resolvePath joins a tool-supplied path against the agent's workspace.
@@ -217,4 +272,57 @@ func makeListDir(workspace string) ToolFunc {
 
 		return sb.String(), nil
 	}
+}
+
+func makeEditFile(workspace string) ToolFunc {
+	return func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+		var args editFileArgs
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return "", fmt.Errorf("parse args: %w", err)
+		}
+
+		if strings.TrimSpace(args.Path) == "" {
+			return "", fmt.Errorf("path is required (got empty or whitespace-only string)")
+		}
+
+		fullPath := resolvePath(workspace, args.Path)
+
+		info, err := os.Stat(fullPath)
+		if err != nil {
+			return "", fmt.Errorf("edit_file: cannot stat %s: %w", fullPath, err)
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("edit_file: %s is a directory, not a file", fullPath)
+		}
+
+		// Refuse binary files: edit_file is line-based.
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			return "", fmt.Errorf("edit_file: cannot read %s: %w", fullPath, err)
+		}
+		if isBinary(data) {
+			return "", fmt.Errorf("edit_file: %s appears to be a binary file (contains null bytes); use write_file instead", fullPath)
+		}
+
+		content := string(data)
+		newContent, count, err := applyEdit(fullPath, content, args.OldString, args.NewString, args.ReplaceAll)
+		if err != nil {
+			return "", err
+		}
+
+		if err := os.WriteFile(fullPath, []byte(newContent), info.Mode()); err != nil {
+			return "", fmt.Errorf("edit_file: write %s: %w", fullPath, err)
+		}
+
+		if args.ReplaceAll {
+			return fmt.Sprintf("Replaced %d occurrences in %s", count, fullPath), nil
+		}
+		return fmt.Sprintf("Edited %s", fullPath), nil
+	}
+}
+
+// isBinary checks whether data contains a null byte, which is a strong
+// signal that the file is binary rather than text.
+func isBinary(data []byte) bool {
+	return len(data) > 0 && bytes.IndexByte(data, 0) >= 0
 }
