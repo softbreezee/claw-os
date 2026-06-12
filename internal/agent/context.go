@@ -196,6 +196,19 @@ Messages from other bots will appear as "[BotName]: message" in the conversation
 		}
 	}
 
+	// 6b. Clarify-first — open-ended tasks get a quick alignment pass
+	//     before execution. Cheap to state, saves the vague-ask to
+	//     wrong-output to redo loop. Behavioral rule, not a skill.
+	sections = append(sections, SystemPromptSection{
+		Name: "Clarify First",
+		Content: `# Clarify First
+When a request is open-ended or underspecified (find AI side-projects worth money, research X, summarize what is happening), do NOT immediately run off and execute on a guess. First align with the user in ONE short round:
+- Offer 2-4 concrete options for the dimensions that actually change the result: scope, language or region, the bar for good, quantity, format.
+- Ask only what changes your plan; do not interrogate. One round, then act.
+- If the request is already specific, or the user said just do it or use your judgment, skip clarifying and proceed.
+Then execute against the agreed scope. For multi-step work, pairing this with a brief plan the user can adjust works well.`,
+	})
+
 	// 7. Self-updating workspace files guidance
 	sections = append(sections, SystemPromptSection{
 		Name: "Workspace Self-Update",

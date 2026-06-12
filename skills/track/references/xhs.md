@@ -1,15 +1,6 @@
----
-name: track-xhs
-description: |
-  追踪小红书博主更新 + 搜索识别最新内容。触发场景:用户要"盯着某个小红书博主有没有
-  发新笔记"、"每天看 XX 话题在小红书上的最新讨论"、"追踪这几个小红书 KOL"、设置小红书
-  内容的定时监控、搜索小红书并筛选值得看的内容。
----
-
 # 小红书追踪(平台差异)
 
-> **先读通用骨架**:`{Base directory}/../track-common/SKILL.md` —— 去重、识别
-> 标准、cron 模板、登录态原则都在那。本文只写小红书的差异。
+> 通用流程见上级 `SKILL.md`(去重、识别标准、cron、登录原则)。本文只写小红书差异。
 
 平台标识:`platform = 'xhs'`,登录 profile:`/profiles/xhs`。
 
@@ -44,8 +35,7 @@ post_id 用笔记 ID(从 explore/<ID> 链接里取)。
 
 ## 小红书特有坑
 
-- **风控较严**:小红书对自动化比较敏感。严格遵守通用骨架的"节制"原则,每天
-  1-2 次,别短时间反复 open。
+- **风控较严**:对自动化敏感。严格遵守"节制"原则,每天 1-2 次,别短时间反复 open。
 - **滑块验证**:撞到滑块/验证页时,snapshot 里会出现验证相关元素 —— 不要尝试
   自动过验证,直接告诉用户"小红书要求验证,需要你手动处理一次",停下。
 - **标题截断**:卡片标题在列表里可能被截断,要完整正文得点进 /explore/<ID>
@@ -56,5 +46,5 @@ post_id 用笔记 ID(从 explore/<ID> 链接里取)。
 ```jsonc
 {"command": "podman exec claw-browser camoufox-cli open https://www.xiaohongshu.com/user/profile/<某公开博主ID> && podman exec claw-browser camoufox-cli wait 3000 && podman exec claw-browser camoufox-cli snapshot -i", "timeout": 280}
 ```
-能稳定读到一组笔记标题 link = 闭环成立,按通用骨架往下做去重+筛选+cron。
+能稳定读到一组笔记标题 link = 闭环成立,按通用骨架做去重+筛选+cron。
 读不到(登录墙/风控)= 先解决数据源,别急着配 cron。
