@@ -95,6 +95,47 @@ message: "用 trading-dashboard skill 重新生成交易仪表盘 dashboard.html
 ```
 但默认不要自动配 cron,等用户明确要。
 
+## 可交互:卡片按钮回调 agent(C)
+
+仪表盘不只是看的,卡片上可以带按钮,点了**直接触发 agent 干下一步** ——
+比如持仓卡上一个「深入分析」按钮,点了就让 agent 去查这只票的 daily_analysis
++ 最新行情给出诊断。这把"看面板"变成"在面板上操作"。
+
+原理:页面和 claw-os 同源(都在 :18953),按钮 onclick 用 fetch POST
+`/api/chat/submit` 触发一个新 agent 任务。
+
+**生成 HTML 时,把 agentId / sessionId 内联成 JS 常量**(页面自己猜不到,
+必须你生成时写进去 —— agentId = 当前 agent 名,sessionId = 当前会话 key):
+
+```html
+<script>
+  const AGENT_ID = "<当前agent名>";      // 生成时填真实值
+  const SESSION_ID = "<当前sessionId>";  // 生成时填真实值
+  function ask(message) {
+    fetch("/api/chat/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId: AGENT_ID, sessionId: SESSION_ID, message })
+    }).then(function(r){ return r.json(); })
+      .then(function(){ alert("已发给 agent,回聊天窗口看结果"); })
+      .catch(function(e){ alert("发送失败: " + e); });
+  }
+</script>
+```
+
+按钮示例(持仓卡片上):
+```html
+<button onclick="ask('深入分析 恩捷股份(002812):查它的 daily_analysis 历史 + 最新行情,给我诊断')">深入分析</button>
+```
+
+**用按钮回调时的注意:**
+- 任务在聊天窗口里执行(不是面板里),点完按钮提示用户回聊天看 —— 面板只是
+  触发器,不显示结果(面板拿不到 agent 的流式输出)。
+- message 要写完整自包含的指令(agent 收到的是一个全新任务,不带面板上下文)。
+- 别滥用:只在"明确的下一步动作"上加按钮(深入分析某只票、刷新面板、把某票
+  加入 watchlist)。不是每个数字都要能点。
+- 这是可选增强 —— 用户没要交互按钮时,生成纯展示面板即可,别强塞。
+
 ## HTML 骨架参考(按探查到的真实数据填充)
 
 ```html
