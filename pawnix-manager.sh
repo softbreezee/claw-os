@@ -31,8 +31,8 @@ GLOBAL_BIN_NAME="pawnix"
 DEFAULT_PORT=18953
 
 # 代理配置（HTTP_PROXY/HTTPS_PROXY 为空时不导出，留给系统代理或不走代理）
-HTTP_PROXY="http://localhost:7892"
-HTTPS_PROXY="http://localhost:7892"
+# HTTP_PROXY="http://localhost:7892"
+# HTTPS_PROXY="http://localhost:7892"
 
 # ─── 输出辅助 ────────────────────────────────────────────────────────────────
 

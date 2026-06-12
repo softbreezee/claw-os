@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/softbreezee/claw-os/internal/bus"
@@ -49,7 +50,167 @@ func planModeNudge() string {
 		"End with exactly one line: \"Reply with 'go' to execute, or " +
 		"tell me what to change.\"\n\n" +
 		"Do not start the work. Do not apologize for needing a plan. " +
-		"Just the plan."
+		"Just the plan.\n\n" +
+		"CRITICAL OUTPUT RULE: Respond with PLAIN TEXT / Markdown only. " +
+		"Do NOT emit any tool-call syntax — no <tool_call>, <invoke>, " +
+		"<function_calls>, <parameter>, no DSML tokens, no JSON tool " +
+		"arguments. Tools are disabled this turn; emitting their syntax " +
+		"produces garbage the user can't read. Name tools in prose " +
+		"(e.g. \"use web_fetch on the Sina page\"), never as a call."
+}
+
+// Plan-mode tool-leak scrubbing.
+//
+// In plan mode we pass tools=nil to the provider so the model CANNOT
+// emit a structured tool_call. Weaker / non-OpenAI models ignore the
+// "don't call tools" instruction anyway and dump a tool invocation as
+// raw text — which then renders as garbage in the plan bubble
+// ("< | DSML | invoke name=\"web_fetch\">…"). These patterns strip
+// that leaked text back out so the user sees either a clean plan or a
+// clear "model misbehaved, retry" message instead of mangled markup.
+//
+// Three leak shapes are covered:
+//   - OpenAI/Anthropic XML:  <tool_call>…</tool_call>, <invoke …>…</invoke>,
+//     <function_calls>…</function_calls>, <parameter …>…</parameter>
+//   - Codex-style DSML tokens that some providers stream literally,
+//     including the fullwidth-pipe ("｜") mangled variant seen in the
+//     wild (e.g. "<｜tool▁calls▁begin｜>"), plus the space-separated
+//     "< | DSML | …>" form a markdown renderer produces from them
+//   - bare leftover tags after the above (a lone </invoke> etc.)
+var (
+	// Block-level tool-call wrappers — remove the whole element incl.
+	// inner content. (?s) so . matches newlines; non-greedy so two
+	// adjacent blocks don't get merged into one giant match.
+	planToolBlockRe = regexp.MustCompile(`(?s)<\s*(tool_calls?|function_calls?|invoke|antml:invoke)\b.*?</\s*(tool_calls?|function_calls?|invoke|antml:invoke)\s*>`)
+
+	// DSML / special-token sentinels, including fullwidth-pipe mangled
+	// forms and the "< | DSML | … >" renderer artifact. We delete the
+	// whole angle-bracket span greedily per line.
+	planDSMLRe = regexp.MustCompile(`(?s)<\s*[|｜][^>]*>|<[^>]*\bDSML\b[^>]*>|[<>]?\s*[|｜]\s*(DSML|tool_calls?|invoke|parameter)\s*[|｜]?`)
+
+	// Leftover single tags (orphan opens/closes that escaped the
+	// block matcher because the model never produced a matching pair).
+	planOrphanTagRe = regexp.MustCompile(`</?\s*(tool_calls?|function_calls?|invoke|antml:invoke|parameter)\b[^>]*>`)
+
+	// A dangling half-open tag fragment at the END of the kept prefix,
+	// left when truncation cut at a leak marker that sat a few chars
+	// past the opening bracket (e.g. "…实际业务。\n<｜" — the "<｜" has
+	// no closing ">"). Anchored to end-of-string so we only trim a
+	// trailing fragment, never an inner "<" the user legitimately
+	// wrote mid-sentence.
+	planDanglingOpenRe = regexp.MustCompile(`(?s)\s*<[|｜<\s]*$`)
+
+	// Strong-signal markers that say "this response is (partly) a
+	// leaked tool call" regardless of how mangled the surrounding
+	// markup is. When any of these appear we don't trust the
+	// post-scrub leftovers (they're typically orphaned parameter
+	// VALUES like a bare URL or "6000" stranded between deleted tags),
+	// so the caller routes to the retry fallback instead of rendering
+	// half-garbage. See sanitizePlanText's leaked return.
+	planLeakSignalRe = regexp.MustCompile(`(?i)\bDSML\b|<\s*(tool_calls?|function_calls?|invoke)\b|name\s*=\s*"(web_fetch|exec|web_search|read_file|write_file|db_query)"|[|｜]\s*(tool_calls?|invoke|parameter)`)
+)
+
+// sanitizePlanText strips leaked tool-call markup from a plan-mode
+// response and tidies whitespace.
+//
+// Returns (clean, leaked). When leaked is true the model emitted a
+// tool call (in any of the OpenAI / Anthropic / DSML shapes).
+//
+// Strategy: TRUNCATE at the first leak marker, don't try to scrub
+// in place. Once the model starts emitting tool-call syntax in plan
+// mode, everything after it is an execution attempt — including big
+// inline payloads (curl commands, embedded python, regex) that live
+// BETWEEN the tags as parameter values and can't be removed by
+// tag-only regexes. Cutting at the first marker keeps any genuine
+// preamble the model wrote before it lost the plot, and discards the
+// whole tool-call dump. We then run the tag scrubbers on the kept
+// prefix too, in case a stray marker slipped in earlier.
+//
+// Idempotent — safe on already-clean text (no marker found, nothing
+// truncated or stripped, leaked=false).
+func sanitizePlanText(s string) (clean string, leaked bool) {
+	if s == "" {
+		return "", false
+	}
+	if loc := planLeakSignalRe.FindStringIndex(s); loc != nil {
+		leaked = true
+		s = s[:loc[0]] // keep only the prose before the first leak
+	}
+	// Defence in depth: scrub any tag fragments that survived in the
+	// kept prefix (rare, but a model can interleave a short stray tag
+	// mid-sentence before the big dump).
+	s = planToolBlockRe.ReplaceAllString(s, "")
+	s = planDSMLRe.ReplaceAllString(s, "")
+	s = planOrphanTagRe.ReplaceAllString(s, "")
+	// The truncation cut at the leak MARKER, which may sit a couple
+	// chars after the opening bracket (e.g. cutting at "DSML" leaves a
+	// dangling "<｜" before it). Strip any half-open tag fragment left
+	// at the very end of the kept prefix.
+	s = planDanglingOpenRe.ReplaceAllString(s, "")
+	s = regexp.MustCompile(`\n{3,}`).ReplaceAllString(s, "\n\n")
+	return strings.TrimSpace(s), leaked
+}
+
+// planProseRe estimates how much of a string is actual prose vs.
+// orphaned parameter values (URLs, bare numbers, punctuation). We
+// count "word-like" runs of letters (incl. CJK) — a real plan has
+// many; a scrubbed tool-call leak leaves mostly a stranded URL and a
+// number like "6000", which score near zero.
+var planProseRe = regexp.MustCompile(`[\p{L}]{2,}`)
+
+// planURLRe strips URLs before the prose count. A scrubbed tool-call
+// leak typically strands a parameter URL whose host/path fragments
+// (stock, finance, sina, corp, php, …) would otherwise count as many
+// prose "words" and defeat the leak check. Removing URLs first means
+// a stranded "6000 https://…" scores ~0 prose runs and falls back.
+var planURLRe = regexp.MustCompile(`https?://\S+`)
+
+// planLeakNotice is appended when a leaked response kept a genuine
+// preamble but the model never produced an actual plan (it started
+// executing instead). Tells the user the truncation happened and what
+// to do, without throwing away the preamble they might want to read.
+const planLeakNotice = "\n\n---\n\n_⚠️ 模型在这里开始直接调用工具(已拦截)而没有写出完整计划。" +
+	"想要计划就重发 `/plan <任务>`;想让它直接执行,去掉 `/plan` 直接发任务即可。_"
+
+// resolvePlan combines sanitize + fallback into the single value the
+// caller renders. Three outcomes:
+//   - not leaked → return the clean plan as-is
+//   - leaked, preamble too thin to be useful → full retry hint
+//   - leaked, real preamble survived → keep it + append a notice so
+//     the user knows the plan was cut short (the model jumped to
+//     execution mid-response)
+//
+// "Thin preamble" is measured by letter-run count AFTER stripping
+// URLs — a stranded parameter URL's path fragments (stock/finance/
+// sina/…) would otherwise inflate the count and let a pure leak slip
+// through as if it were prose.
+func resolvePlan(raw string) string {
+	clean, leaked := sanitizePlanText(raw)
+	trimmed := strings.TrimSpace(clean)
+
+	if trimmed == "" {
+		if leaked {
+			return "_(模型试图直接执行而不是规划。重发 `/plan <任务>`,或去掉 `/plan` 直接发任务让它执行。)_"
+		}
+		return "_(模型返回了空计划。重发 `/plan <任务>`。)_"
+	}
+
+	if leaked {
+		proseOnly := planURLRe.ReplaceAllString(trimmed, "")
+		wordRuns := len(planProseRe.FindAllString(proseOnly, -1))
+		if wordRuns < 6 {
+			slog.Warn("plan-mode produced no usable plan after scrubbing leaked tool calls",
+				"scrubbed_len", len(trimmed), "word_runs", wordRuns)
+			return "_(模型试图直接执行而不是规划。重发 `/plan <任务>`,或去掉 `/plan` 直接发任务让它执行。)_"
+		}
+		// Real preamble survived but the model never finished a plan —
+		// keep what it wrote, flag that the rest was an intercepted
+		// tool dump.
+		slog.Info("plan-mode kept preamble, truncated leaked tool dump",
+			"kept_len", len(trimmed), "word_runs", wordRuns)
+		return clean + planLeakNotice
+	}
+	return clean
 }
 
 // buildToolCatalogForPlan renders a compact "what tools are available
@@ -133,19 +294,29 @@ func (a *Agent) handlePlanMode(ctx context.Context, msg bus.InboundMessage, task
 			emitEvent(ctx, ChatEvent{Type: "done"})
 			return errMsg
 		}
+		final := resolvePlan(resp.Content)
 		sess.Append(provider.Message{
 			Role:    "assistant",
-			Content: resp.Content,
+			Content: final,
 		})
-		emitEvent(ctx, ChatEvent{
-			Type: "content",
-			Data: map[string]any{"content": resp.Content, "metadata": map[string]any{"planMode": true}},
-		})
-		emitEvent(ctx, ChatEvent{Type: "plan_proposed", Data: map[string]any{"plan": resp.Content}})
+		// One content_delta carries the whole cleaned plan into the
+		// plan bubble the frontend opened on plan_started; plan_proposed
+		// then finalizes it and renders the Continue/Adjust footer.
+		emitEvent(ctx, ChatEvent{Type: "content_delta", Data: map[string]any{"delta": final}})
+		emitEvent(ctx, ChatEvent{Type: "plan_proposed", Data: map[string]any{"plan": final}})
 		emitEvent(ctx, ChatEvent{Type: "done"})
-		return resp.Content
+		return final
 	}
 
+	// We accumulate the full stream and sanitize ONCE at the end
+	// rather than emitting raw content_delta chunks. Plan mode is the
+	// one path where the model frequently leaks a raw tool-call token
+	// stream (it wants to just DO the work) — and a half-sanitized
+	// delta would flash garbage like "< | DSML | invoke name=..." in
+	// the UI before the final scrub. Plans are short; buffering them
+	// trades a little streaming feel for never showing the user a
+	// mangled tool-call dump. We emit plan_started (spinner) up front
+	// so the bubble still appears immediately.
 	var planContent strings.Builder
 	for {
 		chunk, ok := sr.Next()
@@ -154,10 +325,6 @@ func (a *Agent) handlePlanMode(ctx context.Context, msg bus.InboundMessage, task
 		}
 		if chunk.Content != "" {
 			planContent.WriteString(chunk.Content)
-			emitEvent(ctx, ChatEvent{
-				Type: "content_delta",
-				Data: map[string]any{"delta": chunk.Content},
-			})
 		}
 		if chunk.Done {
 			break
@@ -167,16 +334,18 @@ func (a *Agent) handlePlanMode(ctx context.Context, msg bus.InboundMessage, task
 		slog.Warn("plan-mode stream error", "agent", a.name, "error", err)
 	}
 
-	final := planContent.String()
+	final := resolvePlan(planContent.String())
 	sess.Append(provider.Message{
 		Role:    "assistant",
 		Content: final,
 	})
 
-	// plan_proposed is the durable event the UI hangs the
-	// "Continue / Adjust" buttons off — it carries the full plan
-	// text in one event so a late subscriber can render the buttons
-	// without replaying every content_delta.
+	// One content_delta carries the cleaned plan into the plan bubble
+	// the frontend opened on plan_started; plan_proposed then finalizes
+	// it (renders the Continue / Adjust footer). Using content_delta —
+	// not content — keeps the plan text inside the plan bubble instead
+	// of spawning a separate agent bubble.
+	emitEvent(ctx, ChatEvent{Type: "content_delta", Data: map[string]any{"delta": final}})
 	emitEvent(ctx, ChatEvent{
 		Type: "plan_proposed",
 		Data: map[string]any{"plan": final},

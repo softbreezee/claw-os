@@ -76,3 +76,6 @@ logs/
 
 # CodeWiz / agent local plans + scratch state, not meant for VCS.
 .codewiz/
+
+# Browser container test artifacts (截图等验证产物,不进仓库)
+deploy/browser/*.png

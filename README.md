@@ -8,7 +8,7 @@
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.2.x-5eead4)](#-roadmap)
+[![Status](https://img.shields.io/badge/status-v0.3.x-5eead4)](#-roadmap)
 
 Multi-agent · Multi-channel · Long-term memory · Cron + Inbox notifications · MCP · Plugins · Web dashboard
 
@@ -60,8 +60,15 @@ pawnix upgrade
 
 1. Run `pawnix` — the setup wizard opens at `http://localhost:18953`.
 2. Pick an LLM provider (OpenAI, Anthropic, or any OpenAI-compatible endpoint).
-3. Click **Launch** — start chatting in the browser.
-4. Optional: open **Channels** in the sidebar to connect Telegram / Discord / Slack (see below).
+3. (Recommended) Pick PostgreSQL as the storage backend in step 2 — `/goal`, semantic memory, and the heartbeat health probe all need it.
+4. Click **Launch** — start chatting in the browser.
+5. Optional: open **Channels** in the sidebar to connect Telegram / Discord / Slack (see below).
+
+### v0.3 demo path (5 minutes)
+
+- **`/plan 复盘今天的两个账户`** → review the plan → click **▶ 继续执行**;watch the `todo.md` panel tick through steps in real time.
+- While the agent is running, type a follow-up in the input box and click **Steer** — it folds into the next ReAct iteration without interrupting the current tool.
+- **`/goal 盯着恩捷股份突破 85 提醒我`** → keep chatting; the agent will keep auditing the goal across turns until you `/goal clear`. See [docs/v0.3-test-guide.md](docs/v0.3-test-guide.md) for caveats (token usage, etc.).
 
 ---
 
@@ -111,7 +118,7 @@ Connect a chat platform once and the same agents become reachable from anywhere 
 - [x] Web dashboard at `:18953`
 - [x] Daemon supervisor with crash auto-restart and restart-aware exit codes
 
-### **v0.2 — Rebrand & The OS Layer** &nbsp;`← you are here`
+### **v0.2 — Rebrand & The OS Layer**
 
 > *From FastClaw to Pawnix — and from "agent runtime" to "personal OS".*
 
@@ -122,15 +129,34 @@ Connect a chat platform once and the same agents become reachable from anywhere 
 - [x] **`notify(text, channel?)` tool** — any agent can push to the user; Inbox by default, IM channels when `MyChatID` is configured
 - [x] **`MyChatID` per channel** — decouples "agent that handles incoming messages" (binding) from "where to push outgoing notifications"
 
-### **v0.3 — Memory OS** &nbsp;*next*
+### **v0.3 — Steering** &nbsp;`← you are here`
 
-> *Make the agent remember you, not just facts.*
+> *Turn the agent from a one-shot chatbot into a partner you can sit beside all day.* See [docs/v0.3-plan.md](docs/v0.3-plan.md) and [docs/v0.3-test-guide.md](docs/v0.3-test-guide.md).
 
-- [ ] Memory graph: extract entities and relations from conversations
-- [ ] Time-aware retrieval (recency-weighted scoring)
-- [ ] Cross-agent shared memory pool with permissions
-- [ ] Memory browser UI: visualize, edit, prune what each agent knows
-- [ ] Skill auto-induction: turn frequent prompt patterns into callable skills
+**Foundation (Week 1)**
+- [x] **`bus.InboundMessage.Origin` 枚举常量化** — `OriginUser/Cron/Webhook/Internal/Heartbeat/SubAgent/GoalContext/UserSteer` + `IsRuntimeInjected` helper
+- [x] **Skills section token budget** — system prompt skills 段限到 ~2k token;`load_skill` 工具按需读 body + IP guard wrapper(防 chatter 套出 prompt template)
+- [x] **Memory pgvector readiness** — 启动期 `VerifyVectorReady` 探针 + Heartbeat 30min embedding 覆盖率巡检;silent failure 不再隐形
+- [x] **Onboarding 收尾** — `handleLaunch` `waitForGateway` 轮询代替硬编码 3s 跳转;Telegram bot token 字段加 UI
+
+**可打断 — Mid-run Steering (Week 2)**
+- [x] **`SteerBuffer`** + `ContextWithSteerBuffer` + agent loop 在每轮 ReAct iteration 头部 drain
+- [x] **`POST /api/chat/tasks/{id}/steer`** + taskrunner.Steer + `ErrTaskNotRunning` (409 fallback to /submit)
+- [x] **Web UI**: turn 进行中输入框走 steer 路径,新增 **Steer** 按钮 + 虚线 steer 气泡 + `queued` / `applied` badge
+
+**可围观 — `/plan` slash + Todo 进度面板 (Week 3)**
+- [x] **`/plan <task>`** slash:tools=nil 单轮 LLM 调用 + plan-mode nudge + tool catalog 注入
+- [x] **PlanBubble**:streaming 时 `drafting…` badge,完成后底部出现 **▶ 继续执行** / **✎ 调整方案** 内联按钮
+- [x] **TodoPanel**:每 3s 轮询 `workspace/todo.md`,markdown checkbox 渲染成进度卡,塌缩 + N/M badge
+
+**可托管 — `/goal` MVP (Week 4)**
+- [x] **`internal/agent/goal/`** 包:Goal domain + Status 状态机 + `FoldUsage` 计费 + `ContinuationPrompt` / `BudgetLimitPrompt` 模板
+- [x] **`agent_goals` PG 表** + `GoalStore` (Create/Get/Update/Delete) + UNIQUE (agent_id, session_key)
+- [x] **`/goal` slash 命令族**:create / show / pause / resume / clear,tight-loop 防御(goal_context origin 不再触发新一轮)
+- [x] **PostTurn 自动 fire continuation**:每个用户 turn 结束都 audit goal,直到 model 标 complete 或 `/goal clear`
+
+**v0.4 储备**
+- [x] **`delegate_task` 工具** — sub-task 独立 ReAct loop + 独立 iteration budget,parent context 不污染;per-Agent serial mutex 防 sandbox/workspace 写竞争;sub-task toolset 过滤 `delegate_task` 防嵌套
 
 ### **v0.4 — Multi-modal & Voice**
 
@@ -138,8 +164,13 @@ Connect a chat platform once and the same agents become reachable from anywhere 
 - [ ] Screen understanding (screenshot → multimodal LLM → action)
 - [ ] First-class file ingestion (PDF / video / Excel → memory)
 
-### **v0.5 — Agent Marketplace**
+### **v0.5 — Memory Graph & Agent Marketplace**
 
+- [ ] Memory graph: extract entities and relations from conversations
+- [ ] Time-aware retrieval (recency-weighted scoring)
+- [ ] Cross-agent shared memory pool with permissions
+- [ ] Memory browser UI: visualize, edit, prune what each agent knows
+- [ ] Skill auto-induction: turn frequent prompt patterns into callable skills
 - [ ] Skills Hub: a "GitHub for skills" with one-click install
 - [ ] Agent export/import: full bundle (persona + skills + memory schema)
 
@@ -165,12 +196,16 @@ Connect a chat platform once and the same agents become reachable from anywhere 
 | **ReAct loop** | Multi-turn reasoning + tool calling, configurable max iterations |
 | **Any LLM** | Any OpenAI-compatible API; per-call model override from the chat UI |
 | **Multi-agent** | Independent persona / memory / skills per agent; team `@mention` routing |
-| **Memory** | `MEMORY.md` + FTS / pgvector; auto-pruning + LLM-driven compression |
-| **Skills** | On-demand `SKILL.md` loading; agents can learn skills from interaction patterns |
+| **Memory** | `MEMORY.md` + FTS / pgvector; auto-pruning + LLM-driven compression; readiness probe + heartbeat health巡检 |
+| **Skills** | Per-section token budget (~2k);on-demand `SKILL.md` loading via `load_skill` + IP guard; agents can learn skills from interaction patterns |
 | **Channels** | Web · Telegram · Discord · Slack · custom (JSON-RPC plugin) |
 | **Cron** | Cron expressions / intervals / one-shot — single store-backed ledger |
 | **Inbox** | Cron / webhook / `notify` results land in the dashboard Inbox + browser toast |
 | **`notify(text, channel?)`** | Any agent can push to the user — Inbox by default, IM when `MyChatID` is set |
+| **Mid-run steering** &nbsp;`v0.3` | Add a "supplemental instruction" while the agent is running — folded in at the next ReAct iteration boundary |
+| **`/plan` slash** &nbsp;`v0.3` | One-shot plan-only turn (tools disabled), with **继续执行 / 调整方案** inline buttons + live `todo.md` progress panel |
+| **`/goal` slash** &nbsp;`v0.3` | Persistent multi-turn objective; agent auto-audits across turns until complete or `/goal clear`; PG-backed (one row per session) |
+| **`delegate_task` tool** &nbsp;`v0.4` | Sub-task with own context + own iteration budget; SERIAL within an agent; no nesting |
 | **Hooks** | Before / After hooks on prompts, model calls, tool calls |
 | **Hot reload** | Edit config or `SOUL.md` → takes effect immediately |
 | **Storage** | File (default) · PostgreSQL + pgvector · SQLite + FTS5 |
@@ -179,7 +214,11 @@ Connect a chat platform once and the same agents become reachable from anywhere 
 
 ### Built-in tools
 
-`exec` · `read_file` / `write_file` / `list_dir` · `web_fetch` · `web_search` · `memory_search` · `message` · `notify` · `spawn_subagent` · `create_cron_job` / `list_cron_jobs` / `delete_cron_job` · `load_skill` · `db_query` / `db_create_table` · all MCP tools
+`exec` · `read_file` / `write_file` / `list_dir` · `web_fetch` · `web_search` · `memory_search` · `message` · `notify` · `spawn_subagent` · `delegate_task` · `create_cron_job` / `list_cron_jobs` / `delete_cron_job` · `load_skill` · `db_query` / `db_create_table` · all MCP tools
+
+### Slash commands
+
+`/help` · `/status` · `/usage` · `/insights [N]` · `/new` `/reset` · `/retry` · `/undo` · `/compact` · `/personality [<name>]` · `/model [<name>]` · `/version` · **`/plan <task>`** · **`/goal [<task>|pause|resume|clear]`**
 
 ---
 
