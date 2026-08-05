@@ -523,10 +523,22 @@ export default function ChatPage() {
   useEffect(() => {
     if (!selectedAgent || !sessionId) return;
     let alive = true;
+    let inFlight = false;
     const refresh = () => {
-      getSessionContextInfo(selectedAgent, sessionId).then((info) => {
-        if (alive) setContextInfo(info);
-      });
+      // In-flight guard: this effect re-runs whenever `sending` flips
+      // (twice per turn), each time firing an immediate refresh(). Plus
+      // the 10s interval. Without this guard those can overlap and stack
+      // context-info reads; the guard drops any refresh while one is in
+      // flight.
+      if (inFlight) return;
+      inFlight = true;
+      getSessionContextInfo(selectedAgent, sessionId)
+        .then((info) => {
+          if (alive) setContextInfo(info);
+        })
+        .finally(() => {
+          inFlight = false;
+        });
     };
     refresh();
     const timer = setInterval(refresh, 10_000);
@@ -554,7 +566,12 @@ export default function ChatPage() {
   }, [selectedAgent, sessionId, updateRuntime]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Use "auto" (instant), not "smooth": messages changes at per-token
+    // frequency during SSE streaming, and each smooth scroll kicks off a
+    // ~300ms animation. Back-to-back tokens stack these animations on a
+    // large component, which is the jank felt while the agent streams.
+    // Instant jump-to-bottom has no animation to stack.
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
   }, [messages]);
 
   useEffect(() => {
@@ -1319,11 +1336,12 @@ export default function ChatPage() {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="mx-auto max-w-3xl px-4 py-6 space-y-1">
             {/* Live progress against the agent's plan. Polls
-                workspace/todo.md every 3s and renders the checkbox
-                state inline above the message stream. Auto-hides when
-                the file doesn't exist or has no checkbox lines, so
-                agents that don't use /plan never see this. */}
-            {selectedAgent && <TodoPanel agentId={selectedAgent} />}
+                workspace/todo.md and renders the checkbox state inline
+                above the message stream. Polls every 3s only while a
+                task is running (active=sending); reads once when idle.
+                Auto-hides when the file doesn't exist or has no checkbox
+                lines, so agents that don't use /plan never see this. */}
+            {selectedAgent && <TodoPanel agentId={selectedAgent} active={sending} />}
 
             {messages.length === 0 && !sending && (
               <EmptyState agentName={selectedAgent} onPrompt={(p) => handleSend(p)} />
@@ -2255,7 +2273,7 @@ function parseTodos(md: string): TodoItem[] {
   return out;
 }
 
-function TodoPanel({ agentId }: { agentId: string }) {
+function TodoPanel({ agentId, active }: { agentId: string; active: boolean }) {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [collapsed, setCollapsed] = useState(false);
 
@@ -2265,9 +2283,14 @@ function TodoPanel({ agentId }: { agentId: string }) {
       return;
     }
     let cancelled = false;
+    let inFlight = false;
     const url = fileURL({ kind: "workspace", path: "todo.md", agentId });
 
     const fetchOnce = async () => {
+      // In-flight guard: never let a slow /api/files read overlap the
+      // next tick. Without this, a stalled read stacks requests.
+      if (inFlight) return;
+      inFlight = true;
       try {
         const res = await fetch(url, { cache: "no-store" });
         if (!res.ok) {
@@ -2279,16 +2302,28 @@ function TodoPanel({ agentId }: { agentId: string }) {
         setTodos(parseTodos(text));
       } catch {
         if (!cancelled) setTodos([]);
+      } finally {
+        inFlight = false;
       }
     };
 
+    // Always read once so the panel reflects the last todo.md state.
     fetchOnce();
+    // Only poll while a task is actively running. When idle, todo.md
+    // does not change, so a perpetual 3s poll just 404s (or re-reads a
+    // stale file) forever — pure main-thread + network churn that shows
+    // up as UI lag. Idle => one read, no interval.
+    if (!active) {
+      return () => {
+        cancelled = true;
+      };
+    }
     const id = setInterval(fetchOnce, 3000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [agentId]);
+  }, [agentId, active]);
 
   if (todos.length === 0) return null;
 
