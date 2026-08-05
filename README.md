@@ -4,15 +4,15 @@
 
 # Pawnix
 
-**A self-hosted, AI-Native personal OS — in a single Go binary.**
+**A persistent, shared memory backend for your AI tools — in a single Go binary.**
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-v0.3.x-5eead4)](#-roadmap)
 
-Multi-agent · Multi-channel · Long-term memory · Cron + Inbox notifications · MCP · Plugins · Web dashboard
+Cross-session memory that persists forever · retrieved every turn · shared across hermes, Claude Code & Codex over MCP
 
-[Install](#-install) · [Quick Start](#-quick-start) · [Channels](#-channels-setup) · [Architecture](#-architecture) · [Roadmap](#-roadmap)
+[Install](#-install) · [Memory Backend](#-memory-backend-pawnix-mcp) · [Quick Start](#-quick-start) · [Architecture](#-architecture) · [Roadmap](#-roadmap)
 
 </div>
 
@@ -20,21 +20,22 @@ Multi-agent · Multi-channel · Long-term memory · Cron + Inbox notifications �
 
 ## What is Pawnix?
 
-Pawnix is **not just an agent runtime** — it's a long-running, self-hosted layer between you and any LLM, designed to behave the way an operating system does for your AI life:
+**Your AI tools forget everything between sessions. Pawnix is the memory they share.**
 
-- **Always on.** Daemon supervisor keeps the gateway alive across crashes and config changes.
-- **Multi-agent.** Run a personal team — coder, analyst, scheduler — each with its own personality, memory, and skills.
-- **Multi-channel by default.** Same agents, reachable from your browser, Telegram, Discord, Slack, or any custom plugin channel.
-- **Notifications as a first-class primitive.** Cron jobs, watchers, and any agent can `notify` you — through the in-app Inbox, browser toasts, or back through your IM channels.
-- **Persistent memory.** `MEMORY.md` + searchable conversation logs + pgvector semantic memory.
-- **Skills that grow.** Drop a `SKILL.md` and your agent can do new things; agents can learn skills from interaction patterns.
-- **Local-first, cloud-optional.** Defaults to plain JSON in `~/.pawnix/`. Switch to PostgreSQL / SQLite when you outgrow files.
-- **Single binary.** No Docker, no Python venv, no Node runtime. Cross-compiles for macOS / Linux / Windows.
+Every chat with hermes, Claude Code, or Codex starts from zero — the same preferences re-explained, the same decisions re-litigated, context that mattered yesterday gone today. Pawnix is a self-hosted **memory layer** that sits underneath all of them: one persistent, searchable pool of long-term memory, exposed over the Model Context Protocol so any MCP client can read and write it.
+
+- **Persists forever.** Memory lives in PostgreSQL + pgvector, not in a process or a session. Close the tool, come back a month later — it's still there.
+- **Retrieved every turn.** Clients query the pool at the start of each turn (read-aggressive tool descriptions steer this), so the model walks in already knowing your preferences, past decisions, and project background.
+- **Shared across tools.** hermes, Claude Code, and Codex each spawn a `pawnix mcp` subprocess against the **same shared pool** — what one learns, the others can recall. Per-memory `source:` tags keep provenance.
+- **Read-aggressive, write-conservative.** Reads are cheap and encouraged; writes are deliberately restrained (only cross-session-important facts) so the pool stays signal, not noise.
+- **Single binary.** No Docker, no Python venv, no Node runtime. `pawnix mcp` is a stdio subprocess any MCP client can launch. Cross-compiles for macOS / Linux / Windows.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/softbreezee/claw-os/main/install.sh | bash
-pawnix    # opens the setup wizard at http://localhost:18953
+pawnix mcp --source claude-code     # run the memory backend as a stdio MCP server
 ```
+
+> **Pawnix is also a full agent runtime.** The same binary can run standalone multi-agent teams over Telegram / Discord / Slack, with cron, an inbox, and a web dashboard — see [Agent Runtime](#-agent-runtime-optional) below. But its center of gravity is the memory layer: **lightweight, and good at remembering.**
 
 ---
 
@@ -56,11 +57,61 @@ pawnix upgrade
 
 ---
 
+## 🧠 Memory Backend (`pawnix mcp`)
+
+The heart of Pawnix. `pawnix mcp` runs a stdio MCP server that exposes one PostgreSQL + pgvector memory pool to any MCP client, so hermes, Claude Code, and Codex all read and write the **same** long-term memory.
+
+```
+hermes ─┐
+codex  ─┼─ spawn ─→  pawnix mcp  (stdio, JSON-RPC 2.0)
+claude ─┘                 │
+                          ▼
+                 PostgreSQL + pgvector
+                 (memories table, shared pool agent_id=shared)
+```
+
+**Design principle — read-aggressive, write-conservative.** The decision of *what's worth remembering* stays with the calling model, steered by the tool descriptions. Reads are encouraged every turn; writes are held to cross-session-important facts only — so the pool never fills with the disposable context that plagues naive auto-persist.
+
+### Tools
+
+| Tool | Role | When |
+|---|---|---|
+| `memory_search` | Semantic search over the pool (degrades to keyword + recency without embeddings) | **Every turn** that might touch past context — read aggressively |
+| `memory_write` | Write one long-term memory (`content` + `kind`: fact / user_note / report) | **Only cross-session-important info**; when unsure, ask the user first |
+| `memory_stats` | Pool health (total / embedded / last 24h) | Diagnostics only |
+
+`--source <tool>` bakes a `source:<tool>` provenance tag into every written memory at spawn time — the origin is fixed by the launch flag, not self-reported by the model. `--agent <id>` overrides the default shared pool to read/write a single agent's memory.
+
+### Wire it into your tools
+
+```jsonc
+// hermes / claw-os — config "mcpServers"
+{ "mcpServers": { "memory": { "type": "stdio", "command": "pawnix", "args": ["mcp", "--source", "hermes"] } } }
+
+// Claude Code — ~/.claude.json or project .mcp.json
+{ "mcpServers": { "memory": { "command": "pawnix", "args": ["mcp", "--source", "claude-code"] } } }
+```
+
+```toml
+# Codex — ~/.codex/config.toml
+[mcp_servers.memory]
+command = "pawnix"
+args = ["mcp", "--source", "codex"]
+```
+
+**Prerequisite:** `~/.pawnix/pawnix.json` must set `storage.type = "postgres"` with a valid DSN (the memory backend needs pgvector). If no embedder is configured, search degrades gracefully to keyword + recency. Full guide: [docs/memory-mcp.md](docs/memory-mcp.md). Smoke-test the JSON-RPC loop with [`scripts/mcp-smoke-test.sh`](scripts/mcp-smoke-test.sh).
+
+---
+
+## 🤖 Agent Runtime (optional)
+
+Beyond the memory backend, the same binary is a full standalone agent runtime — a self-hosted layer between you and any LLM: multi-agent teams, multi-channel messaging (Telegram / Discord / Slack), cron jobs, an inbox, and a web dashboard. You don't need any of it to use `pawnix mcp` as a memory backend — it's here if you want a batteries-included agent host too. Everything from here down describes that runtime.
+
 ## 🚀 Quick Start
 
 1. Run `pawnix` — the setup wizard opens at `http://localhost:18953`.
 2. Pick an LLM provider (OpenAI, Anthropic, or any OpenAI-compatible endpoint).
-3. (Recommended) Pick PostgreSQL as the storage backend in step 2 — `/goal`, semantic memory, and the heartbeat health probe all need it.
+3. (Recommended) Pick PostgreSQL as the storage backend in step 2 — the shared memory pool, `/goal`, semantic memory, and the heartbeat health probe all need it.
 4. Click **Launch** — start chatting in the browser.
 5. Optional: open **Channels** in the sidebar to connect Telegram / Discord / Slack (see below).
 
@@ -166,9 +217,10 @@ Connect a chat platform once and the same agents become reachable from anywhere 
 
 ### **v0.5 — Memory Graph & Agent Marketplace**
 
+- [x] **Cross-tool shared memory pool** — `pawnix mcp` stdio server, one pgvector pool shared by hermes / Claude Code / Codex, per-row `source:` provenance
 - [ ] Memory graph: extract entities and relations from conversations
 - [ ] Time-aware retrieval (recency-weighted scoring)
-- [ ] Cross-agent shared memory pool with permissions
+- [ ] Per-source read/write permissions on the shared pool
 - [ ] Memory browser UI: visualize, edit, prune what each agent knows
 - [ ] Skill auto-induction: turn frequent prompt patterns into callable skills
 - [ ] Skills Hub: a "GitHub for skills" with one-click install
@@ -196,6 +248,7 @@ Connect a chat platform once and the same agents become reachable from anywhere 
 | **ReAct loop** | Multi-turn reasoning + tool calling, configurable max iterations |
 | **Any LLM** | Any OpenAI-compatible API; per-call model override from the chat UI |
 | **Multi-agent** | Independent persona / memory / skills per agent; team `@mention` routing |
+| **Memory backend** &nbsp;`core` | `pawnix mcp` stdio server exposes one pgvector pool to hermes / Claude Code / Codex; shared `agent_id`, per-row `source:` provenance; read-aggressive, write-conservative |
 | **Memory** | `MEMORY.md` + FTS / pgvector; auto-pruning + LLM-driven compression; readiness probe + heartbeat health巡检 |
 | **Skills** | Per-section token budget (~2k);on-demand `SKILL.md` loading via `load_skill` + IP guard; agents can learn skills from interaction patterns |
 | **Channels** | Web · Telegram · Discord · Slack · custom (JSON-RPC plugin) |
@@ -214,7 +267,9 @@ Connect a chat platform once and the same agents become reachable from anywhere 
 
 ### Built-in tools
 
-`exec` · `read_file` / `write_file` / `list_dir` · `web_fetch` · `web_search` · `memory_search` · `message` · `notify` · `spawn_subagent` · `delegate_task` · `create_cron_job` / `list_cron_jobs` / `delete_cron_job` · `load_skill` · `db_query` / `db_create_table` · all MCP tools
+`exec` · `read_file` / `write_file` / `list_dir` · `web_fetch` · `web_search` · `memory_search` / `memory_write` / `memory_stats` · `message` · `notify` · `spawn_subagent` · `delegate_task` · `create_cron_job` / `list_cron_jobs` / `delete_cron_job` · `load_skill` · `db_query` / `db_create_table` · all MCP tools
+
+The three `memory_*` tools are also exposed standalone over stdio via [`pawnix mcp`](#-memory-backend-pawnix-mcp), so external MCP clients (hermes / Claude Code / Codex) share the same pool.
 
 ### Slash commands
 
@@ -388,6 +443,7 @@ Internal endpoints (Pawnix-native): `/api/cron`, `/api/notifications`, `/api/cha
 
 ```bash
 pawnix                      # start (setup wizard or gateway)
+pawnix mcp                  # run the memory MCP server (stdio) — add --source <tool>
 pawnix gateway              # start gateway explicitly
 pawnix doctor               # check config health
 pawnix upgrade              # update to latest
@@ -447,12 +503,12 @@ Contributions welcome. Pawnix's strength is **simplicity** — keep it that way.
 
 Pawnix stands on the shoulders of [**fastclaw-ai/fastclaw**](https://github.com/fastclaw-ai/fastclaw).
 
-This project began as a fork of FastClaw and evolved into a self-hosted AI-Native personal OS. The entire v0.1 Foundation — multi-LLM provider routing, multi-agent gateway, channels (Telegram / Discord / Slack), the skill system, plugin protocol, MCP client, dual-layer memory, daemon supervisor, web dashboard scaffolding — all originated in or grew directly out of FastClaw's design and code.
+This project began as a fork of FastClaw and has since refocused into a lightweight, self-hosted **memory backend** for AI tools — with a full agent runtime still riding along in the same binary. The entire v0.1 Foundation — multi-LLM provider routing, multi-agent gateway, channels (Telegram / Discord / Slack), the skill system, plugin protocol, MCP client, dual-layer memory, daemon supervisor, web dashboard scaffolding — all originated in or grew directly out of FastClaw's design and code.
 
 Huge thanks to the FastClaw authors for building such a clean, hackable foundation, and for releasing it under MIT so projects like this one are even possible. If you like Pawnix, please go give the [original repo](https://github.com/fastclaw-ai/fastclaw) a star.
 
 ---
 
 <div align="center">
-  <sub>Built with 🐾 by the Pawnix community · Forked with gratitude from <a href="https://github.com/fastclaw-ai/fastclaw">FastClaw</a></sub>
+  <sub>🐾 The memory your AI tools share · Built by the Pawnix community · Forked with gratitude from <a href="https://github.com/fastclaw-ai/fastclaw">FastClaw</a></sub>
 </div>
