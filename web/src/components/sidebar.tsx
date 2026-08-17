@@ -20,6 +20,7 @@ import {
   Circle,
   AppWindow,
   Inbox,
+  Activity,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useTheme } from "@/components/theme-provider";
@@ -45,6 +46,7 @@ const navGroups = [
       { href: "/skills/", label: "Skills", icon: Sparkles },
       { href: "/plugins/", label: "Plugins", icon: Puzzle },
       { href: "/mcp/", label: "MCP Servers", icon: Cable },
+      { href: "/memory/", label: "Memory", icon: Activity },
       { href: "/channels/", label: "Channels", icon: Radio },
       { href: "/cron/", label: "Cron Jobs", icon: Clock },
       { href: "/apps/", label: "Apps", icon: AppWindow },

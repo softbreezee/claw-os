@@ -133,6 +133,32 @@ func (db *DB) Migrate(ctx context.Context) error {
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS agent_goals_session
 			ON agent_goals (agent_id, session_key)`,
+
+		// mcp_events backs the memory observability dashboard: one row
+		// per memory MCP tool call (search/write/stats), tagged with the
+		// origin tool (source) and the client subprocess (connection_id
+		// ≈ one session). The `pawnix mcp` subprocess self-provisions
+		// this via EventStore.EnsureSchema too, since runMCP calls Open
+		// without Migrate — but keeping it here means the main server
+		// creates it up-front. See internal/store/pg/event_store.go.
+		`CREATE TABLE IF NOT EXISTS mcp_events (
+			id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+			connection_id TEXT        NOT NULL,
+			source        TEXT        NOT NULL DEFAULT '',
+			agent_id      TEXT        NOT NULL DEFAULT 'shared',
+			tool          TEXT        NOT NULL,
+			query         TEXT        NOT NULL DEFAULT '',
+			kind          TEXT        NOT NULL DEFAULT '',
+			result_count  INT         NOT NULL DEFAULT 0,
+			hit           BOOLEAN     NOT NULL DEFAULT false,
+			error         TEXT        NOT NULL DEFAULT '',
+			duration_ms   INT         NOT NULL DEFAULT 0,
+			created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+		`CREATE INDEX IF NOT EXISTS mcp_events_source_time
+			ON mcp_events (source, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS mcp_events_conn
+			ON mcp_events (connection_id)`,
 	}
 
 	for _, stmt := range stmts {

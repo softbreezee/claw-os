@@ -216,6 +216,9 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("PUT /api/mcp/{name}", s.handleUpdateMCPServer)
 	mux.HandleFunc("DELETE /api/mcp/{name}", s.handleDeleteMCPServer)
 
+	// Memory observability — usage rollup from mcp_events telemetry
+	mux.HandleFunc("GET /api/memory/usage", s.handleMemoryUsage)
+
 	// Skills
 	mux.HandleFunc("GET /api/skills", s.handleListSkills)
 	mux.HandleFunc("GET /api/skills/{name}", s.handleGetSkill)

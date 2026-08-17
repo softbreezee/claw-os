@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/softbreezee/claw-os/internal/config"
@@ -70,17 +73,72 @@ func runMCP(agentID, source string) error {
 
 	memStore := pgstore.NewMemoryStore(db)
 
+	// Observability: log every tool call to mcp_events so the dashboard
+	// can show per-source / per-session usage. Telemetry is best-effort
+	// and must NEVER break a tool call, so schema-provisioning failure
+	// just disables logging (logger.store stays nil). runMCP calls Open
+	// not Migrate, so the table self-provisions here.
+	eventStore := pgstore.NewEventStore(db)
+	if err := eventStore.EnsureSchema(ctx); err != nil {
+		slog.Warn("mcp: telemetry disabled (schema provisioning failed)", "error", err)
+		eventStore = nil
+	}
+	logger := &mcpLogger{
+		store:   eventStore,
+		connID:  uuid.NewString(),
+		source:  source,
+		agentID: agentID,
+	}
+
 	// Build the embedder for semantic search. Optional: if it can't be
 	// constructed (no embed model, or provider not configured), reads
 	// degrade to keyword+recency search rather than failing outright.
 	embedder, embedModel := buildEmbedder(cfg)
 
 	srv := mcpserver.NewServer("pawnix-memory", version)
-	registerMemorySearch(srv, memStore, embedder, embedModel, agentID)
-	registerMemoryStats(srv, memStore, agentID)
-	registerMemoryWrite(srv, memStore, embedder, embedModel, agentID, source)
+	registerMemorySearch(srv, memStore, embedder, embedModel, agentID, logger)
+	registerMemoryStats(srv, memStore, agentID, logger)
+	registerMemoryWrite(srv, memStore, embedder, embedModel, agentID, source, logger)
 
 	return srv.Serve()
+}
+
+// mcpLogger writes one mcp_events row per tool call. All fields are set
+// once at spawn time except the per-call event. connID identifies this
+// subprocess (≈ one client session); source/agentID come from flags.
+type mcpLogger struct {
+	store   *pgstore.EventStore
+	connID  string
+	source  string
+	agentID string
+}
+
+// log records one tool call. Best-effort: a nil store (telemetry
+// disabled) or a write error is swallowed after a warning on stderr —
+// stdout carries the JSON-RPC stream, so slog (stderr) is safe here.
+func (l *mcpLogger) log(tool, query, kind string, resultCount int, hit bool, callErr error, started time.Time) {
+	if l == nil || l.store == nil {
+		return
+	}
+	e := pgstore.MCPEvent{
+		ConnectionID: l.connID,
+		Source:       l.source,
+		AgentID:      l.agentID,
+		Tool:         tool,
+		Query:        query,
+		Kind:         kind,
+		ResultCount:  resultCount,
+		Hit:          hit,
+		DurationMs:   int(time.Since(started).Milliseconds()),
+	}
+	if callErr != nil {
+		e.Error = callErr.Error()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := l.store.Insert(ctx, e); err != nil {
+		slog.Warn("mcp: telemetry insert failed", "tool", tool, "error", err)
+	}
 }
 
 // buildEmbedder resolves the "provider/model" embed spec into a live
@@ -145,7 +203,7 @@ const memoryWriteDesc = `向长期记忆库写入一条记忆。这是跨会话�
 
 // ── Tool registration ─────────────────────────────────────────────
 
-func registerMemorySearch(srv *mcpserver.Server, store *pgstore.MemoryStore, embedder provider.Provider, embedModel, agentID string) {
+func registerMemorySearch(srv *mcpserver.Server, store *pgstore.MemoryStore, embedder provider.Provider, embedModel, agentID string, logger *mcpLogger) {
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -177,6 +235,7 @@ func registerMemorySearch(srv *mcpserver.Server, store *pgstore.MemoryStore, emb
 			limit = 5
 		}
 
+		started := time.Now()
 		ctx := context.Background()
 		var queryEmbedding []float32
 		if embedder != nil {
@@ -188,6 +247,7 @@ func registerMemorySearch(srv *mcpserver.Server, store *pgstore.MemoryStore, emb
 		// SearchSemantic transparently falls back to keyword/recency
 		// search when queryEmbedding is empty.
 		records, err := store.SearchSemantic(ctx, agentID, queryEmbedding, limit)
+		logger.log("memory_search", in.Query, "", len(records), len(records) > 0, err, started)
 		if err != nil {
 			return "", err
 		}
@@ -195,15 +255,17 @@ func registerMemorySearch(srv *mcpserver.Server, store *pgstore.MemoryStore, emb
 	})
 }
 
-func registerMemoryStats(srv *mcpserver.Server, store *pgstore.MemoryStore, agentID string) {
+func registerMemoryStats(srv *mcpserver.Server, store *pgstore.MemoryStore, agentID string, logger *mcpLogger) {
 	schema := map[string]interface{}{
 		"type":       "object",
 		"properties": map[string]interface{}{},
 	}
 
 	srv.Register("memory_stats", memoryStatsDesc, schema, func(args json.RawMessage) (string, error) {
+		started := time.Now()
 		ctx := context.Background()
 		h, err := store.HealthStats(ctx, agentID)
+		logger.log("memory_stats", "", "", int(h.Total), h.Total > 0, err, started)
 		if err != nil {
 			return "", err
 		}
@@ -217,7 +279,7 @@ func registerMemoryStats(srv *mcpserver.Server, store *pgstore.MemoryStore, agen
 	})
 }
 
-func registerMemoryWrite(srv *mcpserver.Server, store *pgstore.MemoryStore, embedder provider.Provider, embedModel, agentID, source string) {
+func registerMemoryWrite(srv *mcpserver.Server, store *pgstore.MemoryStore, embedder provider.Provider, embedModel, agentID, source string, logger *mcpLogger) {
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -259,6 +321,7 @@ func registerMemoryWrite(srv *mcpserver.Server, store *pgstore.MemoryStore, embe
 			tags = []string{"source:" + source}
 		}
 
+		started := time.Now()
 		ctx := context.Background()
 		var embedding []float32
 		if embedder != nil {
@@ -268,6 +331,11 @@ func registerMemoryWrite(srv *mcpserver.Server, store *pgstore.MemoryStore, embe
 		}
 
 		id, err := store.Insert(ctx, agentID, kind, content, embedding, tags)
+		writeCount := 1
+		if err != nil {
+			writeCount = 0
+		}
+		logger.log("memory_write", "", kind, writeCount, false, err, started)
 		if err != nil {
 			return "", err
 		}

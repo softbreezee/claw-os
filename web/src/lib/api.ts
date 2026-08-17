@@ -1004,3 +1004,58 @@ export async function rebuildEmbeddings(agentId: string): Promise<{ ok: boolean;
   });
   return res.json();
 }
+
+// ── Memory observability ──
+// Usage rollup from the mcp_events telemetry every `pawnix mcp` subprocess
+// writes. When storage isn't Postgres the endpoint returns { available:
+// false } (no other fields), so every field past `available` is optional
+// and the page defaults them.
+
+export interface SourceUsage {
+  source: string;
+  sessions: number;
+  searches: number;
+  writes: number;
+  stats: number;
+  hits: number;
+  misses: number;
+  lastActive: string;
+}
+
+export interface SessionUsage {
+  connectionId: string;
+  source: string;
+  firstSeen: string;
+  lastSeen: string;
+  turns: number;
+  writes: number;
+  hits: number;
+  topics: string[];
+}
+
+export interface RecentEvent {
+  source: string;
+  tool: string;
+  query: string;
+  kind: string;
+  resultCount: number;
+  hit: boolean;
+  createdAt: string;
+}
+
+export interface UsageOverview {
+  available: boolean;
+  totalEvents?: number;
+  totalSessions?: number;
+  totalSearches?: number;
+  totalWrites?: number;
+  totalHits?: number;
+  sources?: SourceUsage[];
+  sessions?: SessionUsage[];
+  recent?: RecentEvent[];
+}
+
+export async function getMemoryUsage(): Promise<UsageOverview> {
+  const res = await fetch("/api/memory/usage");
+  return res.json();
+}
