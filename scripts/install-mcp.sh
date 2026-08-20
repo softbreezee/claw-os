@@ -81,7 +81,7 @@ ensure_codex_toml() {
   local cfg="$1" tag="$2" label="$3"
   mkdir -p "$(dirname "$cfg")"
   if [ -f "$cfg" ] && grep -qE '^\[mcp_servers\.memory\]' "$cfg" 2>/dev/null; then
-    skip "$label：$cfg 里已存在 [mcp_servers.memory]，跳过（如需改动请手动编辑）"
+    skip "${label}：$cfg 里已存在 [mcp_servers.memory]，跳过（如需改动请手动编辑）"
     return 0
   fi
   # 追加前确保文件以换行结尾，避免和已有末行黏在一起。
@@ -93,7 +93,7 @@ ensure_codex_toml() {
 command = "$PAWNIX"
 args = ["mcp", "--source", "$tag"]
 EOF
-  ok "$label：已写入 $cfg"
+  ok "${label}：已写入 $cfg"
 }
 
 # ── 2. Claude Code ───────────────────────────────────────────────────
