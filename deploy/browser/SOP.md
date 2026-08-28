@@ -201,14 +201,13 @@ podman logs --tail 30 claw-browser                           # 看 crash 痕迹
 
 ```bash
 cd <claw-os>
-./pawnix-manager.sh deploy        # 重新加载,让 agent 看到 browser / track-* skill
+./pawnix-manager.sh deploy        # 重新加载,让 agent 看到 browser / track skill
 ```
 Web UI 打开后 **Cmd+Shift+R 强制刷新**(清前端缓存)。
 
 相关 skill 已随仓库:
 - `skills/browser/` — camoufox-cli 通用操作
-- `skills/track-common/` — 追踪通用骨架(去重/筛选/cron)
-- `skills/track-xhs/` `track-douyin/` `track-x/` — 各平台
+- `skills/track/` — 社媒追踪通用骨架(去重/筛选/cron);平台差异见 `references/{xhs,douyin,x}.md`
 
 **验证:** 回聊天界面发:
 ```

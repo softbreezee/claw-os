@@ -14,7 +14,7 @@ Web UI (paperclip / paste / drop)
     ▼
 POST /api/chat/submit
     │ - parse form
-    │ - persist each file to ~/.fastclaw/uploads/<sha256>.<ext>
+    │ - persist each file to ~/.pawnix/uploads/<sha256>.<ext>
     │ - build []bus.Attachment
     ▼
 taskrunner.SubmitWithOptions(..., Attachments)
@@ -58,7 +58,7 @@ provider.OpenAI / provider.Anthropic
 
 - **Per file**: 25 MiB (constant `maxAttachmentBytes`); enforced both in JS and Go.
 - **Per request**: bounded by `maxMultipartMemory` (32 MiB in RAM, larger spills to `/tmp`).
-- **Cleanup**: none yet — the `~/.fastclaw/uploads/` dir grows monotonically.
+- **Cleanup**: none yet — the `~/.pawnix/uploads/` dir grows monotonically.
 
 ## Future stages
 

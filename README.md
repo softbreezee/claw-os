@@ -182,7 +182,7 @@ Connect a chat platform once and the same agents become reachable from anywhere 
 
 ### **v0.3 — Steering** &nbsp;`← you are here`
 
-> *Turn the agent from a one-shot chatbot into a partner you can sit beside all day.* See [docs/v0.3-plan.md](docs/v0.3-plan.md) and [docs/v0.3-test-guide.md](docs/v0.3-test-guide.md).
+> *Turn the agent from a one-shot chatbot into a partner you can sit beside all day.* See [docs/v0.3-plan.md](docs/v0.3-plan.md) and [docs/v0.3-test-guide.md](docs/v0.3-test-guide.md). For a code-verified ledger of what shipped vs. what carries delivery debt, see [docs/STATUS.md](docs/STATUS.md).
 
 **Foundation (Week 1)**
 - [x] **`bus.InboundMessage.Origin` 枚举常量化** — `OriginUser/Cron/Webhook/Internal/Heartbeat/SubAgent/GoalContext/UserSteer` + `IsRuntimeInjected` helper
@@ -205,6 +205,7 @@ Connect a chat platform once and the same agents become reachable from anywhere 
 - [x] **`agent_goals` PG 表** + `GoalStore` (Create/Get/Update/Delete) + UNIQUE (agent_id, session_key)
 - [x] **`/goal` slash 命令族**:create / show / pause / resume / clear,tight-loop 防御(goal_context origin 不再触发新一轮)
 - [x] **PostTurn 自动 fire continuation**:每个用户 turn 结束都 audit goal,直到 model 标 complete 或 `/goal clear`
+- ⚠️ **Token budget guard 未接线** — `FoldUsage`/`BudgetLimitPrompt` 代码就位但无生产调用方,goal 从不设预算;防跑飞目前只靠 continuation tight-loop 闸。详见 [docs/STATUS.md §4](docs/STATUS.md)
 
 **v0.4 储备**
 - [x] **`delegate_task` 工具** — sub-task 独立 ReAct loop + 独立 iteration budget,parent context 不污染;per-Agent serial mutex 防 sandbox/workspace 写竞争;sub-task toolset 过滤 `delegate_task` 防嵌套
@@ -249,7 +250,7 @@ Connect a chat platform once and the same agents become reachable from anywhere 
 | **Any LLM** | Any OpenAI-compatible API; per-call model override from the chat UI |
 | **Multi-agent** | Independent persona / memory / skills per agent; team `@mention` routing |
 | **Memory backend** &nbsp;`core` | `pawnix mcp` stdio server exposes one pgvector pool to hermes / Claude Code / Codex; shared `agent_id`, per-row `source:` provenance; read-aggressive, write-conservative |
-| **Memory** | `MEMORY.md` + FTS / pgvector; auto-pruning + LLM-driven compression; readiness probe + heartbeat health巡检 |
+| **Memory** | `MEMORY.md` + FTS / pgvector semantic retrieval injected each turn; AutoPersist LLM extraction every N turns + embedding; readiness probe + heartbeat coverage巡检. (Dedup / compression / PII-blocking are designed but not yet shipped — see [docs/memory-governance.md](docs/memory-governance.md)) |
 | **Skills** | Per-section token budget (~2k);on-demand `SKILL.md` loading via `load_skill` + IP guard; agents can learn skills from interaction patterns |
 | **Channels** | Web · Telegram · Discord · Slack · custom (JSON-RPC plugin) |
 | **Cron** | Cron expressions / intervals / one-shot — single store-backed ledger |
@@ -487,7 +488,7 @@ make release-local   # all platforms
 └── plugins/
 ```
 
-PostgreSQL tables (when `storage.type = "postgres"`): `configs` · `agents` · `workspace_files` · `sessions` · `memory_logs` · `cron_jobs` · `notifications` · `chat_tasks` · `memories` · `research_data` · `schema_registry`
+PostgreSQL tables (when `storage.type = "postgres"`): `configs` · `agents` · `workspace_files` · `sessions` · `memory_logs` · `cron_jobs` · `notifications` · `chat_tasks` · `memories` · `mcp_events` · `research_data` · `schema_registry`
 
 ---
 

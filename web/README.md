@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Pawnix Dashboard (web/)
 
-## Getting Started
+The Pawnix web dashboard — a Next.js app that is **statically exported and embedded into the Go binary**, then served by the gateway at `http://localhost:18953`. There is no separate frontend server in production: `pawnix` ships one binary with this UI baked in.
 
-First, run the development server:
+## How it fits together
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+web/  ──(pnpm build)──▶  web/out/  ──(copy)──▶  internal/setup/web/  ──(go:embed)──▶  pawnix binary
+   Next.js source          static export           embed dir                     served at :18953
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- `next.config.ts` sets `output: 'export'` (+ `trailingSlash`, unoptimized images) so `pnpm build` emits a fully static site into `web/out/`.
+- `internal/setup/embed.go` embeds that tree via `//go:embed all:web`; the gateway serves it directly.
+- Because the UI is embedded at compile time, **editing `web/` has no effect until you rebuild and re-embed** (see below).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Develop
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+# from repo root
+cd web
+pnpm install
+pnpm dev        # hot-reload dev server at http://localhost:3000 (talks to a running gateway on :18953)
+```
 
-## Learn More
+For the dev server, API calls hit the gateway on `:18953`, so run `pawnix` (or `make dev`) alongside it.
 
-To learn more about Next.js, take a look at the following resources:
+## Build & embed into the binary
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Do this from the **repo root** (the Makefile drives it):
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+make build-web   # pnpm install --frozen-lockfile + pnpm build, then sync web/out → internal/setup/web
+make embed-web   # faster: just sync an already-built web/out into internal/setup/web
+make dev-build   # embed-web + rebuild the Go binary (the usual loop after editing web/)
+```
 
-## Deploy on Vercel
+> Common gotcha: run `pnpm build` (or `make build-web`) after editing `web/`, otherwise the binary keeps serving a stale `internal/setup/web`. See the repo memory note on the build env.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Pages (`src/app/`)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Each dashboard page maps to a route directory. Current pages:
+
+`overview` · `chat` · `inbox` · `agents` · `models` · `skills` · `plugins` · `channels` · `cron` · `apps` · `settings` · `mcp` · `memory` · `onboard`
+
+Notable ones:
+
+- **memory** — the MCP memory observability dashboard: per-source / per-session rollups of `mcp_events` (which tool searched or wrote, turn counts, topics, read-hit status). Backed by `GET /api/memory/usage` (`internal/setup/handlers_memevents.go`).
+- **chat** — async, task-based chat with mid-run **Steer**, `/plan` PlanBubble, and the live `todo.md` progress panel (v0.3 Steering features).
+- **onboard** — the first-run setup wizard (provider, storage, launch).
+
+## Stack
+
+Next.js (App Router) · React · Tailwind CSS + `@tailwindcss/typography` · shadcn / `@base-ui/react` components · `lucide-react` icons · `react-markdown` + `remark-gfm` for rendering. Static export only — no server components at runtime, no browser storage APIs.

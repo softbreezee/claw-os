@@ -108,8 +108,7 @@ daemon),正常。看到 snapshot 输出一堆元素 = 浏览器工作正常。
 agent 通过现有的 `exec` 工具调 `podman exec claw-browser camoufox-cli ...`,
 不需要改 claw-os 代码。相关 skill 已经写好:
 - `skills/browser/` —— 浏览器操作通用能力(camoufox-cli 用法)
-- `skills/track-common/` —— 追踪/监控通用骨架(去重、筛选、cron)
-- `skills/track-xhs/` `skills/track-douyin/` `skills/track-x/` —— 各平台差异
+- `skills/track/` —— 社媒追踪通用骨架(去重、筛选、cron);平台差异按需读 `references/{xhs,douyin,x}.md`
 
 agent 遇到"追踪某博主/搜话题"时会自动加载对应 skill。
 
